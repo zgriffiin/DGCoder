@@ -6,6 +6,8 @@ import { Effect, Layer, Stream } from "effect";
 
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { KiroAdapter, KiroAdapterShape } from "../Services/KiroAdapter.ts";
+import { AmazonQAdapter, AmazonQAdapterShape } from "../Services/AmazonQAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
@@ -45,6 +47,16 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeKiroAdapter: KiroAdapterShape = {
+  ...fakeCodexAdapter,
+  provider: "kiro",
+};
+
+const fakeAmazonQAdapter: AmazonQAdapterShape = {
+  ...fakeCodexAdapter,
+  provider: "amazonQ",
+};
+
 const layer = it.layer(
   Layer.mergeAll(
     Layer.provide(
@@ -52,6 +64,8 @@ const layer = it.layer(
       Layer.mergeAll(
         Layer.succeed(CodexAdapter, fakeCodexAdapter),
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
+        Layer.succeed(KiroAdapter, fakeKiroAdapter),
+        Layer.succeed(AmazonQAdapter, fakeAmazonQAdapter),
       ),
     ),
     NodeServices.layer,
@@ -68,7 +82,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(claude, fakeClaudeAdapter);
 
       const providers = yield* registry.listProviders();
-      assert.deepEqual(providers, ["codex", "claudeAgent"]);
+      assert.deepEqual(providers, ["codex", "claudeAgent", "kiro", "amazonQ"]);
     }),
   );
 

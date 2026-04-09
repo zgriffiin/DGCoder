@@ -38,6 +38,17 @@ export function isCommandMissingCause(error: unknown): boolean {
   return lower.includes("enoent") || lower.includes("notfound");
 }
 
+export function isCommandMissingResult(result: CommandResult): boolean {
+  if (result.code === 0) return false;
+  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  return (
+    lowerOutput.includes("enoent") ||
+    lowerOutput.includes("command not found") ||
+    lowerOutput.includes("not found") ||
+    lowerOutput.includes("not recognized")
+  );
+}
+
 export const spawnAndCollect = (binaryPath: string, command: ChildProcess.Command) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

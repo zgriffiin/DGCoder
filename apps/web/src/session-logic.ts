@@ -29,6 +29,8 @@ export const PROVIDER_OPTIONS: Array<{
 }> = [
   { value: "codex", label: "Codex", available: true },
   { value: "claudeAgent", label: "Claude", available: true },
+  { value: "kiro", label: "Kiro", available: true },
+  { value: "amazonQ", label: "Amazon Q", available: true },
   { value: "cursor", label: "Cursor", available: false },
 ];
 

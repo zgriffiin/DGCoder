@@ -4,7 +4,7 @@ import { DEFAULT_SERVER_SETTINGS, type QualityGateSettings } from "@t3tools/cont
 import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect";
 import ts from "typescript";
 
-import { GitCore } from "./git/Services/GitCore";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
 import { runProcess } from "./processRunner";
 import { ServerSettingsService } from "./serverSettings";
 
@@ -132,6 +132,29 @@ function isFunctionLike(node: ts.Node): node is ts.FunctionLikeDeclaration {
   );
 }
 
+function isCyclomaticBranch(node: ts.Node): boolean {
+  return (
+    ts.isIfStatement(node) ||
+    ts.isConditionalExpression(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isWhileStatement(node) ||
+    ts.isDoStatement(node) ||
+    ts.isCatchClause(node) ||
+    ts.isCaseClause(node)
+  );
+}
+
+function isCyclomaticBinary(node: ts.Node): boolean {
+  return (
+    ts.isBinaryExpression(node) &&
+    (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+      node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+      node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+  );
+}
+
 function functionName(node: ts.FunctionLikeDeclaration, sourceFile: ts.SourceFile): string {
   const named = "name" in node ? node.name : undefined;
   if (named && ts.isIdentifier(named)) {
@@ -149,26 +172,7 @@ function cyclomaticComplexity(node: ts.FunctionLikeDeclaration): number {
       return;
     }
 
-    if (
-      ts.isIfStatement(child) ||
-      ts.isConditionalExpression(child) ||
-      ts.isForStatement(child) ||
-      ts.isForInStatement(child) ||
-      ts.isForOfStatement(child) ||
-      ts.isWhileStatement(child) ||
-      ts.isDoStatement(child) ||
-      ts.isCatchClause(child) ||
-      ts.isCaseClause(child)
-    ) {
-      complexity += 1;
-    }
-
-    if (
-      ts.isBinaryExpression(child) &&
-      (child.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
-        child.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
-        child.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
-    ) {
+    if (isCyclomaticBranch(child) || isCyclomaticBinary(child)) {
       complexity += 1;
     }
 
@@ -251,6 +255,160 @@ function analyzeCodeFile(input: {
   return failures;
 }
 
+function failureIdentity(failure: QualityGateFailure): string {
+  if (failure.ruleId === "max-file-lines") {
+    return `${failure.ruleId}:${failure.filePath ?? ""}`;
+  }
+
+  const filePath = failure.filePath ?? "";
+  const prefix = filePath.length > 0 ? `${filePath}:` : "";
+  const detail =
+    prefix.length > 0 && failure.message.startsWith(prefix)
+      ? failure.message.slice(prefix.length)
+      : failure.message;
+  const functionLabel = detail.replace(/^\d+\s+/, "").split(" has ")[0] ?? detail;
+  const normalizedLabel = functionLabel.replace(/^anonymous function at line \d+$/, "anonymous");
+  return `${failure.ruleId}:${filePath}:${normalizedLabel}`;
+}
+
+function removeBaselineFailures(input: {
+  readonly currentFailures: ReadonlyArray<QualityGateFailure>;
+  readonly baselineFailures: ReadonlyArray<QualityGateFailure>;
+}): ReadonlyArray<QualityGateFailure> {
+  if (input.baselineFailures.length === 0) {
+    return input.currentFailures;
+  }
+
+  const baselineIdentities = new Set(input.baselineFailures.map(failureIdentity));
+  return input.currentFailures.filter(
+    (failure) => !baselineIdentities.has(failureIdentity(failure)),
+  );
+}
+
+interface QualityGateAnalysisServices {
+  readonly git: GitCoreShape;
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly pathService: Path.Path;
+}
+
+const changedFiles = (git: GitCoreShape, cwd: string) =>
+  git.statusDetailsLocal(cwd).pipe(
+    Effect.map((status) =>
+      [...new Set(status.workingTree.files.map((file) => file.path))].toSorted((a, b) =>
+        a.localeCompare(b),
+      ),
+    ),
+    Effect.catch(() => Effect.succeed([] as string[])),
+  );
+
+const readHeadSource = Effect.fn("qualityGate.readHeadSource")(function* (
+  git: GitCoreShape,
+  cwd: string,
+  relativePath: string,
+) {
+  const result = yield* git
+    .execute({
+      operation: "QualityGate.readHeadSource",
+      cwd,
+      args: ["show", `HEAD:${relativePath}`],
+      allowNonZeroExit: true,
+      timeoutMs: 10_000,
+      maxOutputBytes: 16 * 1024 * 1024,
+      truncateOutputAtMaxBytes: true,
+    })
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  if (result === null || result.code !== 0 || result.stdoutTruncated) {
+    return null;
+  }
+  return result.stdout;
+});
+
+const readCurrentSource = Effect.fn("qualityGate.readCurrentSource")(function* (
+  services: Pick<QualityGateAnalysisServices, "fileSystem" | "pathService">,
+  cwd: string,
+  relativePath: string,
+) {
+  const absolutePath = services.pathService.join(cwd, relativePath);
+  const exists = yield* services.fileSystem
+    .exists(absolutePath)
+    .pipe(Effect.catch(() => Effect.succeed(false)));
+  if (!exists) {
+    return null;
+  }
+  return yield* services.fileSystem
+    .readFileString(absolutePath)
+    .pipe(Effect.catch(() => Effect.succeed("")));
+});
+
+const analyzeChangedCodeFile = Effect.fn("qualityGate.analyzeChangedCodeFile")(function* (
+  services: QualityGateAnalysisServices,
+  cwd: string,
+  settings: QualityGateSettings,
+  relativePath: string,
+) {
+  const source = yield* readCurrentSource(services, cwd, relativePath);
+  if (source === null) {
+    return [];
+  }
+  const currentFailures = analyzeCodeFile({ relativePath, source, settings });
+  const baselineSource = yield* readHeadSource(services.git, cwd, relativePath);
+  const baselineFailures =
+    baselineSource === null
+      ? []
+      : analyzeCodeFile({ relativePath, source: baselineSource, settings });
+  return removeBaselineFailures({ currentFailures, baselineFailures });
+});
+
+const analyzeChangedFiles = Effect.fn("analyzeChangedFiles")(function* (
+  services: QualityGateAnalysisServices,
+  cwd: string,
+  settings: QualityGateSettings,
+  files: ReadonlyArray<string>,
+) {
+  const failures: QualityGateFailure[] = [];
+  for (const relativePath of files.filter(isAnalyzableCodePath)) {
+    failures.push(...(yield* analyzeChangedCodeFile(services, cwd, settings, relativePath)));
+    if (failures.length >= MAX_FAILURES_PER_RULE * 3) {
+      break;
+    }
+  }
+  return failures.slice(0, MAX_FAILURES_PER_RULE * 3);
+});
+
+const runCommandChecks = Effect.fn("qualityGate.runCommandChecks")(function* (
+  cwd: string,
+  settings: QualityGateSettings,
+) {
+  return yield* Effect.tryPromise(() =>
+    Promise.all([
+      settings.format
+        ? runCommandCheck({
+            cwd,
+            ruleId: "format",
+            label: "Format check",
+            args: ["run", "fmt:check"],
+          })
+        : Promise.resolve(null),
+      settings.lint
+        ? runCommandCheck({
+            cwd,
+            ruleId: "lint",
+            label: "Lint check",
+            args: ["run", "lint"],
+          })
+        : Promise.resolve(null),
+      settings.typecheck
+        ? runCommandCheck({
+            cwd,
+            ruleId: "typecheck",
+            label: "Typecheck",
+            args: ["run", "typecheck"],
+          })
+        : Promise.resolve(null),
+    ]),
+  ).pipe(Effect.catch(() => Effect.succeed([] as Array<QualityGateFailure | null>)));
+});
+
 export function formatQualityGateFailureDetail(result: QualityGateResult): string {
   const failures = result.failures.slice(0, 8);
   const suffix =
@@ -284,50 +442,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const serverSettings = yield* ServerSettingsService;
-
-  const changedFiles = (cwd: string) =>
-    git.statusDetailsLocal(cwd).pipe(
-      Effect.map((status) =>
-        [...new Set(status.workingTree.files.map((file) => file.path))].toSorted((a, b) =>
-          a.localeCompare(b),
-        ),
-      ),
-      Effect.catch(() => Effect.succeed([] as string[])),
-    );
-
-  const analyzeChangedFiles = Effect.fn("analyzeChangedFiles")(function* (
-    cwd: string,
-    settings: QualityGateSettings,
-    files: ReadonlyArray<string>,
-  ) {
-    const codeFiles = files.filter(isAnalyzableCodePath);
-    const failures: QualityGateFailure[] = [];
-
-    for (const relativePath of codeFiles) {
-      const absolutePath = pathService.join(cwd, relativePath);
-      const exists = yield* fileSystem
-        .exists(absolutePath)
-        .pipe(Effect.catch(() => Effect.succeed(false)));
-      if (!exists) {
-        continue;
-      }
-      const source = yield* fileSystem
-        .readFileString(absolutePath)
-        .pipe(Effect.catch(() => Effect.succeed("")));
-      failures.push(
-        ...analyzeCodeFile({
-          relativePath,
-          source,
-          settings,
-        }),
-      );
-      if (failures.length >= MAX_FAILURES_PER_RULE * 3) {
-        break;
-      }
-    }
-
-    return failures.slice(0, MAX_FAILURES_PER_RULE * 3);
-  });
+  const analysisServices = { git, fileSystem, pathService };
 
   const evaluate: QualityGateShape["evaluate"] = Effect.fn("qualityGate.evaluate")(function* ({
     cwd,
@@ -347,36 +462,9 @@ const make = Effect.gen(function* () {
       };
     }
 
-    const files = yield* changedFiles(cwd);
-    const commandChecks = yield* Effect.tryPromise(() =>
-      Promise.all([
-        settings.format
-          ? runCommandCheck({
-              cwd,
-              ruleId: "format",
-              label: "Format check",
-              args: ["run", "fmt:check"],
-            })
-          : Promise.resolve(null),
-        settings.lint
-          ? runCommandCheck({
-              cwd,
-              ruleId: "lint",
-              label: "Lint check",
-              args: ["run", "lint"],
-            })
-          : Promise.resolve(null),
-        settings.typecheck
-          ? runCommandCheck({
-              cwd,
-              ruleId: "typecheck",
-              label: "Typecheck",
-              args: ["run", "typecheck"],
-            })
-          : Promise.resolve(null),
-      ]),
-    ).pipe(Effect.catch(() => Effect.succeed([] as Array<QualityGateFailure | null>)));
-    const metricFailures = yield* analyzeChangedFiles(cwd, settings, files);
+    const files = yield* changedFiles(git, cwd);
+    const commandChecks = yield* runCommandChecks(cwd, settings);
+    const metricFailures = yield* analyzeChangedFiles(analysisServices, cwd, settings, files);
     const failures = [
       ...commandChecks.filter((failure): failure is QualityGateFailure => failure !== null),
       ...metricFailures,

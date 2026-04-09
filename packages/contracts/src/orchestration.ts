@@ -1,5 +1,5 @@
 import { Option, Schema, SchemaIssue, Struct } from "effect";
-import { ClaudeModelOptions, CodexModelOptions } from "./model";
+import { ClaudeModelOptions, CliAgentModelOptions, CodexModelOptions } from "./model";
 import { RepositoryIdentity } from "./environment";
 import {
   ApprovalRequestId,
@@ -24,7 +24,7 @@ export const ORCHESTRATION_WS_METHODS = {
   replayEvents: "orchestration.replayEvents",
 } as const;
 
-export const ProviderKind = Schema.Literals(["codex", "claudeAgent"]);
+export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "kiro", "amazonQ"]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
@@ -56,7 +56,26 @@ export const ClaudeModelSelection = Schema.Struct({
 });
 export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
-export const ModelSelection = Schema.Union([CodexModelSelection, ClaudeModelSelection]);
+export const KiroModelSelection = Schema.Struct({
+  provider: Schema.Literal("kiro"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optionalKey(CliAgentModelOptions),
+});
+export type KiroModelSelection = typeof KiroModelSelection.Type;
+
+export const AmazonQModelSelection = Schema.Struct({
+  provider: Schema.Literal("amazonQ"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optionalKey(CliAgentModelOptions),
+});
+export type AmazonQModelSelection = typeof AmazonQModelSelection.Type;
+
+export const ModelSelection = Schema.Union([
+  CodexModelSelection,
+  ClaudeModelSelection,
+  KiroModelSelection,
+  AmazonQModelSelection,
+]);
 export type ModelSelection = typeof ModelSelection.Type;
 
 export const RuntimeMode = Schema.Literals(["approval-required", "full-access"]);

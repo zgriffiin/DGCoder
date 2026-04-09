@@ -195,6 +195,58 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
   }),
 );
 
+it.effect("accepts Kiro and Amazon Q model selections in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const kiro = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-kiro",
+      threadId: "thread-kiro",
+      message: {
+        messageId: "msg-kiro",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      modelSelection: {
+        provider: "kiro",
+        model: "default",
+        options: {},
+      },
+      runtimeMode: "full-access",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const amazonQ = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-amazon-q",
+      threadId: "thread-amazon-q",
+      message: {
+        messageId: "msg-amazon-q",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      modelSelection: {
+        provider: "amazonQ",
+        model: "default",
+        options: {},
+      },
+      runtimeMode: "full-access",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(kiro.modelSelection, {
+      provider: "kiro",
+      model: "default",
+      options: {},
+    });
+    assert.deepStrictEqual(amazonQ.modelSelection, {
+      provider: "amazonQ",
+      model: "default",
+      options: {},
+    });
+  }),
+);
+
 it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

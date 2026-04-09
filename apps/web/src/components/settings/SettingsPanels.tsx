@@ -96,6 +96,7 @@ type InstallProviderSettings = {
   title: string;
   binaryPlaceholder: string;
   binaryDescription: ReactNode;
+  customModelPlaceholder: string;
   homePathKey?: "codexHomePath";
   homePlaceholder?: string;
   homeDescription?: ReactNode;
@@ -107,6 +108,7 @@ const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     title: "Codex",
     binaryPlaceholder: "Codex binary path",
     binaryDescription: "Path to the Codex binary",
+    customModelPlaceholder: "gpt-6.7-codex-ultra-preview",
     homePathKey: "codexHomePath",
     homePlaceholder: "CODEX_HOME",
     homeDescription: "Optional custom Codex home and config directory.",
@@ -116,6 +118,21 @@ const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     title: "Claude",
     binaryPlaceholder: "Claude binary path",
     binaryDescription: "Path to the Claude binary",
+    customModelPlaceholder: "claude-sonnet-5-0",
+  },
+  {
+    provider: "kiro",
+    title: "Kiro",
+    binaryPlaceholder: "Kiro binary path",
+    binaryDescription: "Path to the Kiro binary",
+    customModelPlaceholder: "kiro-model",
+  },
+  {
+    provider: "amazonQ",
+    title: "Amazon Q",
+    binaryPlaceholder: "Amazon Q binary path",
+    binaryDescription: "Path to the Amazon Q binary",
+    customModelPlaceholder: "amazon-q-model",
   },
 ] as const;
 
@@ -561,12 +578,23 @@ export function GeneralSettingsPanel() {
         DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
       settings.providers.claudeAgent.customModels.length > 0,
     ),
+    kiro: Boolean(
+      settings.providers.kiro.binaryPath !== DEFAULT_UNIFIED_SETTINGS.providers.kiro.binaryPath ||
+      settings.providers.kiro.customModels.length > 0,
+    ),
+    amazonQ: Boolean(
+      settings.providers.amazonQ.binaryPath !==
+        DEFAULT_UNIFIED_SETTINGS.providers.amazonQ.binaryPath ||
+      settings.providers.amazonQ.customModels.length > 0,
+    ),
   });
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
     codex: "",
     claudeAgent: "",
+    kiro: "",
+    amazonQ: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -792,6 +820,7 @@ export function GeneralSettingsPanel() {
       title: providerSettings.title,
       binaryPlaceholder: providerSettings.binaryPlaceholder,
       binaryDescription: providerSettings.binaryDescription,
+      customModelPlaceholder: providerSettings.customModelPlaceholder,
       homePathKey: providerSettings.homePathKey,
       homePlaceholder: providerSettings.homePlaceholder,
       homeDescription: providerSettings.homeDescription,
@@ -1419,11 +1448,7 @@ export function GeneralSettingsPanel() {
                             event.preventDefault();
                             addCustomModel(providerCard.provider);
                           }}
-                          placeholder={
-                            providerCard.provider === "codex"
-                              ? "gpt-6.7-codex-ultra-preview"
-                              : "claude-sonnet-5-0"
-                          }
+                          placeholder={providerCard.customModelPlaceholder}
                           spellCheck={false}
                         />
                         <Button

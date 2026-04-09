@@ -45,6 +45,72 @@ const CommandCheckLayer = makeTestLayer({
   maxCyclomaticComplexity: null,
 });
 
+it.layer(MetricThresholdLayer)("QualityGateLive maintainability baseline", (it) => {
+  it.effect("ignores maintainability violations already present in HEAD", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const git = yield* GitCore;
+      const qualityGate = yield* QualityGateService;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3code-quality-gate-baseline-",
+      });
+      yield* git.initRepo({ cwd });
+
+      const sourcePath = path.join(cwd, "src", "legacy.ts");
+      yield* fileSystem.makeDirectory(path.dirname(sourcePath), { recursive: true });
+      yield* fileSystem.writeFileString(
+        sourcePath,
+        [
+          "export function legacy(input: string) {",
+          "  if (input === 'a') return 1;",
+          "  if (input === 'b' || input === 'c') return 2;",
+          "  return input.length > 0 ? 3 : 4;",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      yield* git.execute({
+        operation: "QualityGate.test.addBaseline",
+        cwd,
+        args: ["add", "src/legacy.ts"],
+      });
+      yield* git.execute({
+        operation: "QualityGate.test.commitBaseline",
+        cwd,
+        args: [
+          "-c",
+          "user.name=T3 Code",
+          "-c",
+          "user.email=t3code@example.invalid",
+          "commit",
+          "-m",
+          "baseline",
+        ],
+      });
+
+      yield* fileSystem.writeFileString(
+        sourcePath,
+        [
+          "export function legacy(input: string) {",
+          "  if (input === 'a') return 1;",
+          "  if (input === 'b' || input === 'c') return 2;",
+          "  return input.length > 0 ? 3 : 4;",
+          "}",
+          "// small follow-up edit",
+          "",
+        ].join("\n"),
+      );
+
+      const result = yield* qualityGate.evaluate({ cwd });
+
+      assert.equal(result.status, "passed");
+      assert.deepEqual(result.changedFiles, ["src/legacy.ts"]);
+      assert.deepEqual(result.failures, []);
+    }),
+  );
+});
+
 it.layer(MetricThresholdLayer)("QualityGateLive maintainability thresholds", (it) => {
   it.effect("fails changed files that exceed configured maintainability thresholds", () =>
     Effect.gen(function* () {
