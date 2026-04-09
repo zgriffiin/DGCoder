@@ -12,6 +12,7 @@ import {
   InfoIcon,
   LoaderCircleIcon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 
 import { cn } from "~/lib/utils";
@@ -55,6 +56,18 @@ function CopyErrorButton({ text }: { text: string }) {
         <CopyIcon className="size-3.5" />
       )}
     </button>
+  );
+}
+
+function ToastCloseButton() {
+  return (
+    <Toast.Close
+      aria-label="Dismiss notification"
+      className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      data-slot="toast-close"
+    >
+      <XIcon className="size-3.5" />
+    </Toast.Close>
   );
 }
 
@@ -315,6 +328,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                       {toast.type === "error" &&
                         typeof toast.description === "string" &&
                         !toast.data?.hideCopyButton && <CopyErrorButton text={toast.description} />}
+                      <ToastCloseButton />
                     </div>
                     <Toast.Description
                       className="min-w-0 select-text wrap-break-word text-muted-foreground"
@@ -411,6 +425,7 @@ function AnchoredToasts() {
                               !toast.data?.hideCopyButton && (
                                 <CopyErrorButton text={toast.description} />
                               )}
+                            <ToastCloseButton />
                           </div>
                           <Toast.Description
                             className="min-w-0 select-text wrap-break-word text-muted-foreground"
