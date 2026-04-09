@@ -7,6 +7,7 @@ community for the core application, concepts and helping with understanding this
 industry. 
 
 Me
+
 I'm not a developer, I am an Engineer (of the electrical/ mechanical type). Theo and 
 others have helped me get to this point, with AI of course. 
 
