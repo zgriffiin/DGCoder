@@ -1,4 +1,18 @@
 import {
+  type BeansArchiveInput,
+  type BeansArchiveResult,
+  type BeansCreateInput,
+  type BeansCreateResult,
+  type BeansInitInput,
+  type BeansInitResult,
+  type BeansListInput,
+  type BeansListResult,
+  type BeansProjectState,
+  type BeansProjectStateInput,
+  type BeansRoadmapInput,
+  type BeansRoadmapResult,
+  type BeansUpdateInput,
+  type BeansUpdateResult,
   type GitActionProgressEvent,
   type GitRunStackedActionInput,
   type GitRunStackedActionResult,
@@ -64,6 +78,15 @@ export interface WsRpcClient {
   readonly projects: {
     readonly searchEntries: RpcUnaryMethod<typeof WS_METHODS.projectsSearchEntries>;
     readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.projectsWriteFile>;
+  };
+  readonly beans: {
+    readonly getProjectState: (input: BeansProjectStateInput) => Promise<BeansProjectState>;
+    readonly init: (input: BeansInitInput) => Promise<BeansInitResult>;
+    readonly list: (input: BeansListInput) => Promise<BeansListResult>;
+    readonly create: (input: BeansCreateInput) => Promise<BeansCreateResult>;
+    readonly update: (input: BeansUpdateInput) => Promise<BeansUpdateResult>;
+    readonly archive: (input: BeansArchiveInput) => Promise<BeansArchiveResult>;
+    readonly roadmap: (input: BeansRoadmapInput) => Promise<BeansRoadmapResult>;
   };
   readonly shell: {
     readonly openInEditor: (input: {
@@ -291,6 +314,16 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.projectsSearchEntries](input)),
       writeFile: (input) =>
         transport.request((client) => client[WS_METHODS.projectsWriteFile](input)),
+    },
+    beans: {
+      getProjectState: (input) =>
+        transport.request((client) => client[WS_METHODS.beansGetProjectState](input)),
+      init: (input) => transport.request((client) => client[WS_METHODS.beansInit](input)),
+      list: (input) => transport.request((client) => client[WS_METHODS.beansList](input)),
+      create: (input) => transport.request((client) => client[WS_METHODS.beansCreate](input)),
+      update: (input) => transport.request((client) => client[WS_METHODS.beansUpdate](input)),
+      archive: (input) => transport.request((client) => client[WS_METHODS.beansArchive](input)),
+      roadmap: (input) => transport.request((client) => client[WS_METHODS.beansRoadmap](input)),
     },
     shell: {
       openInEditor: (input) =>

@@ -27,6 +27,21 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.deepEqual(
         decodePatch({
+          qualityGate: {
+            maxFileLines: null,
+            maxFunctionLines: 120,
+          },
+        }),
+        {
+          qualityGate: {
+            maxFileLines: null,
+            maxFunctionLines: 120,
+          },
+        },
+      );
+
+      assert.deepEqual(
+        decodePatch({
           textGenerationModelSelection: {
             options: {
               fastMode: false,
@@ -67,6 +82,12 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             fastMode: true,
           },
         },
+        qualityGate: {
+          format: false,
+          lint: false,
+          maxFileLines: 300,
+          maxFunctionLines: 60,
+        },
       });
 
       const next = yield* serverSettings.updateSettings({
@@ -79,6 +100,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           options: {
             fastMode: false,
           },
+        },
+        qualityGate: {
+          maxFunctionLines: null,
         },
       });
 
@@ -100,6 +124,15 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           reasoningEffort: "high",
           fastMode: false,
         },
+      });
+      assert.deepEqual(next.qualityGate, {
+        enabled: true,
+        format: false,
+        lint: false,
+        typecheck: true,
+        maxFileLines: 300,
+        maxFunctionLines: null,
+        maxCyclomaticComplexity: 15,
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
@@ -224,6 +257,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             binaryPath: "/opt/homebrew/bin/codex",
           },
         },
+        qualityGate: {
+          format: false,
+          maxFileLines: null,
+        },
       });
 
       assert.equal(next.providers.codex.binaryPath, "/opt/homebrew/bin/codex");
@@ -238,6 +275,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           codex: {
             binaryPath: "/opt/homebrew/bin/codex",
           },
+        },
+        qualityGate: {
+          format: false,
+          maxFileLines: null,
         },
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),

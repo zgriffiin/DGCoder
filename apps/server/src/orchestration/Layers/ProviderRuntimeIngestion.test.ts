@@ -42,6 +42,11 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  QUALITY_GATE_FAILED_ACTIVITY_KIND,
+  QualityGateService,
+  type QualityGateResult,
+} from "../../qualityGate.ts";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
@@ -196,9 +201,13 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    qualityGateResult?: QualityGateResult;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
+    const createdAt = new Date().toISOString();
     const provider = createProviderServiceHarness();
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -212,6 +221,17 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(
+        QualityGateService.layerTest(
+          options?.qualityGateResult ?? {
+            status: "skipped",
+            cwd: workspaceRoot,
+            checkedAt: createdAt,
+            changedFiles: [],
+            failures: [],
+          },
+        ),
+      ),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
@@ -223,7 +243,6 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
 
-    const createdAt = new Date().toISOString();
     await Effect.runPromise(
       engine.dispatch({
         type: "project.create",
@@ -531,6 +550,71 @@ describe("ProviderRuntimeIngestion", () => {
       harness.engine,
       (thread) => thread.session?.status === "ready" && thread.session?.activeTurnId === null,
     );
+  });
+
+  it("treats turn.aborted as interrupted and flushes buffered assistant output", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-aborted"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-aborted"),
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-aborted",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-aborted"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-aborted"),
+      itemId: asItemId("item-aborted"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "partial output",
+      },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-turn-aborted"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-aborted"),
+      payload: {
+        reason: "Interrupted by user",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.session?.status === "interrupted" &&
+        entry.session?.activeTurnId === null &&
+        entry.messages.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.turnId === "turn-aborted" &&
+            message.text === "partial output" &&
+            message.streaming === false,
+        ),
+    );
+
+    const assistantMessage = thread.messages.find(
+      (message) => message.role === "assistant" && message.turnId === "turn-aborted",
+    );
+    expect(assistantMessage?.streaming).toBe(false);
+    expect(thread.session?.lastError).toBeNull();
   });
 
   it("ignores auxiliary turn completions from a different provider thread", async () => {
@@ -1991,6 +2075,72 @@ describe("ProviderRuntimeIngestion", () => {
     expect(checkpoint?.status).toBe("missing");
     expect(checkpoint?.assistantMessageId).toBe("assistant:item-p1-assistant");
     expect(checkpoint?.checkpointRef).toBe("provider-diff:evt-turn-diff-updated");
+  });
+
+  it("runs the quality gate when a file-changing turn completes and records failures", async () => {
+    const harness = await createHarness({
+      qualityGateResult: {
+        status: "failed",
+        cwd: "",
+        checkedAt: "2026-04-09T00:00:00.000Z",
+        changedFiles: ["src/large.ts"],
+        failures: [
+          {
+            ruleId: "max-file-lines",
+            message: "src/large.ts has 900 lines (limit 500).",
+            filePath: "src/large.ts",
+            metric: 900,
+            threshold: 500,
+          },
+        ],
+      },
+    });
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-quality-diff"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-quality"),
+      payload: {
+        unifiedDiff: "diff --git a/src/large.ts b/src/large.ts\n+export {}\n",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-quality-turn-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-quality"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.session?.status === "error" &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.kind === QUALITY_GATE_FAILED_ACTIVITY_KIND,
+        ),
+    );
+
+    expect(thread.session?.lastError).toBe(
+      "Quality gate failed. Fix the reported issues before continuing.",
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.kind === QUALITY_GATE_FAILED_ACTIVITY_KIND,
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+    expect(payload?.detail).toContain("src/large.ts has 900 lines");
   });
 
   it("projects context window updates into normalized thread activities", async () => {

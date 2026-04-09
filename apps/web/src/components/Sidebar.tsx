@@ -1655,7 +1655,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                     data-testid="new-thread-button"
                   />
                 }
-                showOnHover
                 className="top-1 right-1.5 size-5 rounded-md p-0 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
                 onClick={handleCreateThreadClick}
               >

@@ -1,4 +1,5 @@
 export * from "./baseSchemas";
+export * from "./beans";
 export * from "./environment";
 export * from "./ipc";
 export * from "./terminal";

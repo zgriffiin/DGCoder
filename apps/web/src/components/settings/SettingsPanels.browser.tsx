@@ -77,6 +77,8 @@ describe("GeneralSettingsPanel observability", () => {
         ),
       )
       .toBeInTheDocument();
+    await expect.element(page.getByText("Quality Guardrails")).toBeInTheDocument();
+    await expect.element(page.getByText("Agent file-change gate")).toBeInTheDocument();
   });
 
   it("opens the logs folder in the preferred editor", async () => {
@@ -99,5 +101,47 @@ describe("GeneralSettingsPanel observability", () => {
     await openLogsButton.click();
 
     expect(openInEditor).toHaveBeenCalledWith("/repo/project/.t3/logs", "cursor");
+  });
+
+  it("persists quality guardrail threshold and command settings", async () => {
+    const updateSettings = vi
+      .fn<LocalApi["server"]["updateSettings"]>()
+      .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
+    window.nativeApi = {
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("spinbutton", { name: "File lines" }).fill("250");
+
+    await vi.waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        qualityGate: {
+          ...DEFAULT_SERVER_SETTINGS.qualityGate,
+          maxFileLines: 250,
+        },
+      }),
+    );
+
+    await page.getByRole("switch", { name: "Lint" }).click();
+
+    await vi.waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        qualityGate: {
+          ...DEFAULT_SERVER_SETTINGS.qualityGate,
+          lint: false,
+          maxFileLines: 250,
+        },
+      }),
+    );
   });
 });

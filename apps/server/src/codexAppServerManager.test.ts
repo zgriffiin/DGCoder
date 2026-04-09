@@ -851,6 +851,28 @@ describe("respondToUserInput", () => {
 });
 
 describe("collab child conversation routing", () => {
+  it("treats turn/aborted as terminal and clears the active turn", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/aborted",
+      params: {
+        threadId: "provider_parent",
+        turn: { id: "turn_parent", status: "interrupted" },
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
   it("rewrites child notification turn ids onto the parent turn", () => {
     const { manager, context, emitEvent } = createCollabNotificationHarness();
 

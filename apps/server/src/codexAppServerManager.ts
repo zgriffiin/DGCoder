@@ -1091,7 +1091,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    if (notification.method === "turn/completed") {
+    if (notification.method === "turn/completed" || notification.method === "turn/aborted") {
       if (isChildConversation) {
         return;
       }
@@ -1100,9 +1100,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const status = this.readString(turn, "status");
       const errorMessage = this.readString(this.readObject(turn, "error"), "message");
       this.updateSession(context, {
-        status: status === "failed" ? "error" : "ready",
+        status: notification.method === "turn/completed" && status === "failed" ? "error" : "ready",
         activeTurnId: undefined,
-        lastError: errorMessage ?? context.session.lastError,
+        lastError:
+          notification.method === "turn/completed" && status === "failed"
+            ? (errorMessage ?? context.session.lastError)
+            : undefined,
       });
       return;
     }

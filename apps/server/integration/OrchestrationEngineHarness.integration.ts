@@ -53,6 +53,7 @@ import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceip
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
+import { QualityGateService } from "../src/qualityGate.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -304,6 +305,15 @@ export const makeOrchestrationIntegrationHarness = (
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(serverSettingsLayer),
+      Layer.provideMerge(
+        QualityGateService.layerTest({
+          status: "skipped",
+          cwd: workspaceDir,
+          checkedAt: "2026-04-09T00:00:00.000Z",
+          changedFiles: [],
+          failures: [],
+        }),
+      ),
     );
     const gitCoreLayer = Layer.succeed(GitCore, {
       renameBranch: (input: Parameters<GitCoreShape["renameBranch"]>[0]) =>

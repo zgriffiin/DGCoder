@@ -2,6 +2,23 @@ import { Schema } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
+import {
+  BeansArchiveInput,
+  BeansArchiveResult,
+  BeansCommandError,
+  BeansCreateInput,
+  BeansCreateResult,
+  BeansInitInput,
+  BeansInitResult,
+  BeansListInput,
+  BeansListResult,
+  BeansProjectState,
+  BeansProjectStateInput,
+  BeansRoadmapInput,
+  BeansRoadmapResult,
+  BeansUpdateInput,
+  BeansUpdateResult,
+} from "./beans";
 import { OpenError, OpenInEditorInput } from "./editor";
 import {
   GitActionProgressEvent,
@@ -80,6 +97,13 @@ export const WS_METHODS = {
   projectsRemove: "projects.remove",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  beansGetProjectState: "beans.getProjectState",
+  beansInit: "beans.init",
+  beansList: "beans.list",
+  beansCreate: "beans.create",
+  beansUpdate: "beans.update",
+  beansArchive: "beans.archive",
+  beansRoadmap: "beans.roadmap",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -159,6 +183,48 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: ProjectWriteFileError,
+});
+
+export const WsBeansGetProjectStateRpc = Rpc.make(WS_METHODS.beansGetProjectState, {
+  payload: BeansProjectStateInput,
+  success: BeansProjectState,
+  error: BeansCommandError,
+});
+
+export const WsBeansInitRpc = Rpc.make(WS_METHODS.beansInit, {
+  payload: BeansInitInput,
+  success: BeansInitResult,
+  error: BeansCommandError,
+});
+
+export const WsBeansListRpc = Rpc.make(WS_METHODS.beansList, {
+  payload: BeansListInput,
+  success: BeansListResult,
+  error: BeansCommandError,
+});
+
+export const WsBeansCreateRpc = Rpc.make(WS_METHODS.beansCreate, {
+  payload: BeansCreateInput,
+  success: BeansCreateResult,
+  error: BeansCommandError,
+});
+
+export const WsBeansUpdateRpc = Rpc.make(WS_METHODS.beansUpdate, {
+  payload: BeansUpdateInput,
+  success: BeansUpdateResult,
+  error: BeansCommandError,
+});
+
+export const WsBeansArchiveRpc = Rpc.make(WS_METHODS.beansArchive, {
+  payload: BeansArchiveInput,
+  success: BeansArchiveResult,
+  error: BeansCommandError,
+});
+
+export const WsBeansRoadmapRpc = Rpc.make(WS_METHODS.beansRoadmap, {
+  payload: BeansRoadmapInput,
+  success: BeansRoadmapResult,
+  error: BeansCommandError,
 });
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -342,6 +408,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsBeansGetProjectStateRpc,
+  WsBeansInitRpc,
+  WsBeansListRpc,
+  WsBeansCreateRpc,
+  WsBeansUpdateRpc,
+  WsBeansArchiveRpc,
+  WsBeansRoadmapRpc,
   WsShellOpenInEditorRpc,
   WsSubscribeGitStatusRpc,
   WsGitPullRpc,

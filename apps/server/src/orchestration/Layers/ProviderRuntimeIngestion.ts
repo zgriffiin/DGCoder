@@ -2,8 +2,10 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationReadModel,
   type OrchestrationProposedPlanId,
   CheckpointRef,
   isToolLifecycleItemType,
@@ -21,6 +23,12 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import {
+  QUALITY_GATE_FAILED_ACTIVITY_KIND,
+  QUALITY_GATE_PASSED_ACTIVITY_KIND,
+  QualityGateService,
+  formatQualityGateFailureDetail,
+} from "../../qualityGate.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderRuntimeIngestionService,
@@ -39,6 +47,8 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+const FILE_CHANGE_TURNS_CACHE_CAPACITY = 10_000;
+const FILE_CHANGE_TURNS_TTL = Duration.minutes(120);
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -505,6 +515,7 @@ const make = Effect.fn("make")(function* () {
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const qualityGate = yield* QualityGateService;
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -524,6 +535,12 @@ const make = Effect.fn("make")(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
+  const fileChangeTurns = yield* Cache.make<string, true>({
+    capacity: FILE_CHANGE_TURNS_CACHE_CAPACITY,
+    timeToLive: FILE_CHANGE_TURNS_TTL,
+    lookup: () => Effect.succeed(true),
+  });
+
   const isGitRepoForThread = Effect.fn("isGitRepoForThread")(function* (threadId: ThreadId) {
     const readModel = yield* orchestrationEngine.getReadModel();
     const thread = readModel.threads.find((entry) => entry.id === threadId);
@@ -538,6 +555,119 @@ const make = Effect.fn("make")(function* () {
       return false;
     }
     return isGitRepository(workspaceCwd);
+  });
+
+  const markTurnHasFileChanges = (threadId: ThreadId, turnId: TurnId) =>
+    Cache.set(fileChangeTurns, providerTurnKey(threadId, turnId), true);
+
+  const takeTurnHasFileChanges = Effect.fn("takeTurnHasFileChanges")(function* (
+    threadId: ThreadId,
+    turnId: TurnId,
+  ) {
+    const key = providerTurnKey(threadId, turnId);
+    const cached = yield* Cache.getOption(fileChangeTurns, key);
+    yield* Cache.invalidate(fileChangeTurns, key);
+    return Option.isSome(cached);
+  });
+
+  const appendQualityGateActivity = (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly tone: "info" | "error";
+    readonly kind:
+      | typeof QUALITY_GATE_PASSED_ACTIVITY_KIND
+      | typeof QUALITY_GATE_FAILED_ACTIVITY_KIND;
+    readonly summary: string;
+    readonly detail: string;
+    readonly createdAt: string;
+  }) =>
+    orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: providerCommandId(input.event, input.kind),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.makeUnsafe(crypto.randomUUID()),
+        tone: input.tone,
+        kind: input.kind,
+        summary: input.summary,
+        payload: {
+          detail: input.detail,
+        },
+        turnId: input.turnId,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+
+  const runQualityGateForCompletedTurn = Effect.fn("runQualityGateForCompletedTurn")(function* (
+    event: ProviderRuntimeEvent,
+    thread: OrchestrationReadModel["threads"][number],
+    turnId: TurnId,
+    now: string,
+  ) {
+    if (!(yield* takeTurnHasFileChanges(thread.id, turnId))) {
+      return;
+    }
+
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const currentThread = readModel.threads.find((entry) => entry.id === thread.id) ?? thread;
+    const workspaceCwd = resolveThreadWorkspaceCwd({
+      thread: currentThread,
+      projects: readModel.projects,
+    });
+    if (!workspaceCwd) {
+      return;
+    }
+
+    const result = yield* qualityGate.evaluate({ cwd: workspaceCwd });
+    if (result.status === "skipped") {
+      return;
+    }
+
+    if (result.status === "passed") {
+      yield* appendQualityGateActivity({
+        event,
+        threadId: thread.id,
+        turnId,
+        tone: "info",
+        kind: QUALITY_GATE_PASSED_ACTIVITY_KIND,
+        summary: "Quality gate passed",
+        detail:
+          result.changedFiles.length > 0
+            ? `Validated ${result.changedFiles.length} changed file(s).`
+            : "Validated project quality checks.",
+        createdAt: now,
+      });
+      return;
+    }
+
+    const detail = formatQualityGateFailureDetail(result);
+    yield* appendQualityGateActivity({
+      event,
+      threadId: thread.id,
+      turnId,
+      tone: "error",
+      kind: QUALITY_GATE_FAILED_ACTIVITY_KIND,
+      summary: "Quality gate failed",
+      detail,
+      createdAt: now,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.session.set",
+      commandId: providerCommandId(event, "quality-gate-session-error"),
+      threadId: thread.id,
+      session: {
+        threadId: thread.id,
+        status: "error",
+        providerName: event.provider,
+        runtimeMode: currentThread.session?.runtimeMode ?? "full-access",
+        activeTurnId: null,
+        lastError: "Quality gate failed. Fix the reported issues before continuing.",
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
   });
 
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
@@ -767,6 +897,7 @@ const make = Effect.fn("make")(function* () {
     const prefix = `${threadId}:`;
     const proposedPlanPrefix = `plan:${threadId}:`;
     const turnKeys = Array.from(yield* Cache.keys(turnMessageIdsByTurnKey));
+    const fileChangeTurnKeys = Array.from(yield* Cache.keys(fileChangeTurns));
     const proposedPlanKeys = Array.from(yield* Cache.keys(bufferedProposedPlanById));
     yield* Effect.forEach(
       turnKeys,
@@ -792,6 +923,11 @@ const make = Effect.fn("make")(function* () {
         key.startsWith(proposedPlanPrefix)
           ? Cache.invalidate(bufferedProposedPlanById, key)
           : Effect.void,
+      { concurrency: 1 },
+    ).pipe(Effect.asVoid);
+    yield* Effect.forEach(
+      fileChangeTurnKeys,
+      (key) => (key.startsWith(prefix) ? Cache.invalidate(fileChangeTurns, key) : Effect.void),
       { concurrency: 1 },
     ).pipe(Effect.asVoid);
   });
@@ -883,6 +1019,15 @@ const make = Effect.fn("make")(function* () {
     const eventTurnId = toTurnId(event.turnId);
     const activeTurnId = thread.session?.activeTurnId ?? null;
 
+    if (
+      eventTurnId &&
+      (event.type === "turn.diff.updated" ||
+        event.type === "files.persisted" ||
+        (event.type === "item.completed" && event.payload.itemType === "file_change"))
+    ) {
+      yield* markTurnHasFileChanges(thread.id, eventTurnId);
+    }
+
     const conflictsWithActiveTurn =
       activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
     const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
@@ -900,6 +1045,7 @@ const make = Effect.fn("make")(function* () {
         case "turn.started":
           return !conflictsWithActiveTurn;
         case "turn.completed":
+        case "turn.aborted":
           if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
             return false;
           }
@@ -924,12 +1070,15 @@ const make = Effect.fn("make")(function* () {
       event.type === "session.exited" ||
       event.type === "thread.started" ||
       event.type === "turn.started" ||
-      event.type === "turn.completed"
+      event.type === "turn.completed" ||
+      event.type === "turn.aborted"
     ) {
       const nextActiveTurnId =
         event.type === "turn.started"
           ? (eventTurnId ?? null)
-          : event.type === "turn.completed" || event.type === "session.exited"
+          : event.type === "turn.completed" ||
+              event.type === "turn.aborted" ||
+              event.type === "session.exited"
             ? null
             : activeTurnId;
       const status = (() => {
@@ -942,6 +1091,8 @@ const make = Effect.fn("make")(function* () {
             return "stopped";
           case "turn.completed":
             return normalizeRuntimeTurnState(event.payload.state) === "failed" ? "error" : "ready";
+          case "turn.aborted":
+            return "interrupted";
           case "session.started":
           case "thread.started":
             // Provider thread/session start notifications can arrive during an
@@ -955,7 +1106,7 @@ const make = Effect.fn("make")(function* () {
           : event.type === "turn.completed" &&
               normalizeRuntimeTurnState(event.payload.state) === "failed"
             ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
-            : status === "ready"
+            : status === "ready" || status === "interrupted"
               ? null
               : (thread.session?.lastError ?? null);
 
@@ -1106,7 +1257,7 @@ const make = Effect.fn("make")(function* () {
       });
     }
 
-    if (event.type === "turn.completed") {
+    if (event.type === "turn.completed" || event.type === "turn.aborted") {
       const turnId = toTurnId(event.turnId);
       if (turnId) {
         const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
@@ -1119,21 +1270,39 @@ const make = Effect.fn("make")(function* () {
               messageId: assistantMessageId,
               turnId,
               createdAt: now,
-              commandTag: "assistant-complete-finalize",
-              finalDeltaCommandTag: "assistant-delta-finalize-fallback",
+              commandTag:
+                event.type === "turn.completed"
+                  ? "assistant-complete-finalize"
+                  : "assistant-complete-interrupted",
+              finalDeltaCommandTag:
+                event.type === "turn.completed"
+                  ? "assistant-delta-finalize-fallback"
+                  : "assistant-delta-interrupted",
             }),
           { concurrency: 1 },
         ).pipe(Effect.asVoid);
         yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
 
-        yield* finalizeBufferedProposedPlan({
-          event,
-          threadId: thread.id,
-          threadProposedPlans: thread.proposedPlans,
-          planId: proposedPlanIdForTurn(thread.id, turnId),
-          turnId,
-          updatedAt: now,
-        });
+        const bufferedPlanId = proposedPlanIdForTurn(thread.id, turnId);
+        if (event.type === "turn.completed") {
+          yield* finalizeBufferedProposedPlan({
+            event,
+            threadId: thread.id,
+            threadProposedPlans: thread.proposedPlans,
+            planId: bufferedPlanId,
+            turnId,
+            updatedAt: now,
+          });
+        } else {
+          yield* clearBufferedProposedPlan(bufferedPlanId);
+        }
+      }
+    }
+
+    if (event.type === "turn.completed") {
+      const turnId = toTurnId(event.turnId);
+      if (turnId) {
+        yield* runQualityGateForCompletedTurn(event, thread, turnId, now);
       }
     }
 

@@ -1,4 +1,20 @@
 import type {
+  BeansArchiveInput,
+  BeansArchiveResult,
+  BeansCreateInput,
+  BeansCreateResult,
+  BeansListInput,
+  BeansListResult,
+  BeansProjectStateInput,
+  BeansProjectState,
+  BeansInitInput,
+  BeansInitResult,
+  BeansRoadmapInput,
+  BeansRoadmapResult,
+  BeansUpdateInput,
+  BeansUpdateResult,
+} from "./beans";
+import type {
   GitCheckoutInput,
   GitCheckoutResult,
   GitCreateBranchInput,
@@ -185,6 +201,15 @@ export interface EnvironmentApi {
   projects: {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
+  };
+  beans: {
+    getProjectState: (input: BeansProjectStateInput) => Promise<BeansProjectState>;
+    init: (input: BeansInitInput) => Promise<BeansInitResult>;
+    list: (input: BeansListInput) => Promise<BeansListResult>;
+    create: (input: BeansCreateInput) => Promise<BeansCreateResult>;
+    update: (input: BeansUpdateInput) => Promise<BeansUpdateResult>;
+    archive: (input: BeansArchiveInput) => Promise<BeansArchiveResult>;
+    roadmap: (input: BeansRoadmapInput) => Promise<BeansRoadmapResult>;
   };
   git: {
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;

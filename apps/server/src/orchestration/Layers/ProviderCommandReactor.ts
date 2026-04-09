@@ -26,6 +26,11 @@ import {
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  QUALITY_GATE_FAILED_ACTIVITY_KIND,
+  QUALITY_GATE_PASSED_ACTIVITY_KIND,
+  prependQualityGateReminder,
+} from "../../qualityGate.ts";
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -144,6 +149,28 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
   const safeFragment = branchFragment.length > 0 ? branchFragment : "update";
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
+}
+
+function payloadDetail(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const detail = (payload as { detail?: unknown }).detail;
+  return typeof detail === "string" && detail.trim().length > 0 ? detail : undefined;
+}
+
+function latestBlockingQualityGateDetail(thread: {
+  readonly activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>;
+}): string | undefined {
+  for (const activity of thread.activities.toReversed()) {
+    if (activity.kind === QUALITY_GATE_PASSED_ACTIVITY_KIND) {
+      return undefined;
+    }
+    if (activity.kind === QUALITY_GATE_FAILED_ACTIVITY_KIND) {
+      return payloadDetail(activity.payload);
+    }
+  }
+  return undefined;
 }
 
 const make = Effect.gen(function* () {
@@ -378,7 +405,12 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const qualityGateDetail = latestBlockingQualityGateDetail(thread);
+    const messageText =
+      qualityGateDetail !== undefined
+        ? prependQualityGateReminder(input.messageText, qualityGateDetail)
+        : input.messageText;
+    const normalizedInput = toNonEmptyProviderInput(messageText);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()

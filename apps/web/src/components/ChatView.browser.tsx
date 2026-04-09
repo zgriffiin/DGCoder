@@ -2577,6 +2577,24 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps the project new thread button visible without hover", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-new-thread-visibility-test" as MessageId,
+        targetText: "new thread visibility test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await expect.element(newThreadButton).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("canonicalizes promoted draft threads to the server thread route", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

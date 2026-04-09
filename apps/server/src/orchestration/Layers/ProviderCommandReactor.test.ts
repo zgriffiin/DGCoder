@@ -37,6 +37,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { QUALITY_GATE_FAILED_ACTIVITY_KIND } from "../../qualityGate.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId =>
@@ -324,6 +325,57 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("prepends unresolved quality gate failures to the next provider turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-quality-gate-failed"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-quality-gate-failed"),
+          tone: "error",
+          kind: QUALITY_GATE_FAILED_ACTIVITY_KIND,
+          summary: "Quality gate failed",
+          payload: {
+            detail: "Quality gate failed after agent file changes.\n- src/large.ts is too large.",
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-quality-remediation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-quality-remediation"),
+          role: "user",
+          text: "continue with the feature",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: expect.stringContaining("A previous agent file change failed the quality gate"),
+    });
+    const sentTurn = harness.sendTurn.mock.calls[0]?.[0] as { input?: string };
+    expect(sentTurn.input).toContain("src/large.ts is too large");
+    expect(sentTurn.input).toContain("User request:\ncontinue with the feature");
   });
 
   it("generates a thread title on the first turn", async () => {

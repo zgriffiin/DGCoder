@@ -17,6 +17,15 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       searchEntries: rpcClient.projects.searchEntries,
       writeFile: rpcClient.projects.writeFile,
     },
+    beans: {
+      getProjectState: rpcClient.beans.getProjectState,
+      init: rpcClient.beans.init,
+      list: rpcClient.beans.list,
+      create: rpcClient.beans.create,
+      update: rpcClient.beans.update,
+      archive: rpcClient.beans.archive,
+      roadmap: rpcClient.beans.roadmap,
+    },
     git: {
       pull: rpcClient.git.pull,
       refreshStatus: rpcClient.git.refreshStatus,

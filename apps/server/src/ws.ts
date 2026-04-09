@@ -23,6 +23,15 @@ import { clamp } from "effect/Number";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+import {
+  archiveBeansProject,
+  createBean,
+  getBeansProjectState,
+  getBeansRoadmap,
+  initBeansProject,
+  listBeans,
+  updateBean,
+} from "./beans/cli";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
 import { GitCore } from "./git/Services/GitCore";
@@ -615,6 +624,34 @@ const WsRpcLayer = WsRpcGroup.toLayer(
           ),
           { "rpc.aggregate": "workspace" },
         ),
+      [WS_METHODS.beansGetProjectState]: (input) =>
+        observeRpcEffect(WS_METHODS.beansGetProjectState, getBeansProjectState(input), {
+          "rpc.aggregate": "workspace",
+        }),
+      [WS_METHODS.beansInit]: (input) =>
+        observeRpcEffect(WS_METHODS.beansInit, initBeansProject(input), {
+          "rpc.aggregate": "workspace",
+        }),
+      [WS_METHODS.beansList]: (input) =>
+        observeRpcEffect(WS_METHODS.beansList, listBeans(input), {
+          "rpc.aggregate": "workspace",
+        }),
+      [WS_METHODS.beansCreate]: (input) =>
+        observeRpcEffect(WS_METHODS.beansCreate, createBean(input), {
+          "rpc.aggregate": "workspace",
+        }),
+      [WS_METHODS.beansUpdate]: (input) =>
+        observeRpcEffect(WS_METHODS.beansUpdate, updateBean(input), {
+          "rpc.aggregate": "workspace",
+        }),
+      [WS_METHODS.beansArchive]: (input) =>
+        observeRpcEffect(WS_METHODS.beansArchive, archiveBeansProject(input), {
+          "rpc.aggregate": "workspace",
+        }),
+      [WS_METHODS.beansRoadmap]: (input) =>
+        observeRpcEffect(WS_METHODS.beansRoadmap, getBeansRoadmap(input), {
+          "rpc.aggregate": "workspace",
+        }),
       [WS_METHODS.shellOpenInEditor]: (input) =>
         observeRpcEffect(WS_METHODS.shellOpenInEditor, open.openInEditor(input), {
           "rpc.aggregate": "workspace",

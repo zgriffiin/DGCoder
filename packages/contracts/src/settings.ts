@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas";
+import { PositiveInt, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas";
 import {
   ClaudeModelOptions,
   CodexModelOptions,
@@ -77,6 +77,19 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+const NullablePositiveInt = Schema.NullOr(PositiveInt);
+
+export const QualityGateSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  format: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  lint: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  typecheck: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  maxFileLines: NullablePositiveInt.pipe(Schema.withDecodingDefault(() => 500)),
+  maxFunctionLines: NullablePositiveInt.pipe(Schema.withDecodingDefault(() => 80)),
+  maxCyclomaticComplexity: NullablePositiveInt.pipe(Schema.withDecodingDefault(() => 15)),
+});
+export type QualityGateSettings = typeof QualityGateSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   defaultThreadEnvMode: ThreadEnvMode.pipe(
@@ -95,6 +108,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  qualityGate: QualityGateSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -161,6 +175,16 @@ const ClaudeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const QualityGateSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  format: Schema.optionalKey(Schema.Boolean),
+  lint: Schema.optionalKey(Schema.Boolean),
+  typecheck: Schema.optionalKey(Schema.Boolean),
+  maxFileLines: Schema.optionalKey(NullablePositiveInt),
+  maxFunctionLines: Schema.optionalKey(NullablePositiveInt),
+  maxCyclomaticComplexity: Schema.optionalKey(NullablePositiveInt),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
@@ -177,5 +201,6 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
     }),
   ),
+  qualityGate: Schema.optionalKey(QualityGateSettingsPatch),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;

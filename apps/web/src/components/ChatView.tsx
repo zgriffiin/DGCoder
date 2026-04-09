@@ -4150,7 +4150,9 @@ export default function ChatView(props: ChatViewProps) {
           activeThreadEnvironmentId={activeThread.environmentId}
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThread.title}
+          activeProjectId={activeThread.projectId}
           activeProjectName={activeProject?.name}
+          activeProjectCwd={activeProject?.cwd ?? null}
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
           activeProjectScripts={activeProject?.scripts}

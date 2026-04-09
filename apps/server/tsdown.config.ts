@@ -9,6 +9,7 @@ export default defineConfig({
   outDir: "dist",
   sourcemap: true,
   clean: true,
+  external: ["typescript"],
   noExternal: (id) => id.startsWith("@t3tools/"),
   inlineOnly: false,
   banner: {

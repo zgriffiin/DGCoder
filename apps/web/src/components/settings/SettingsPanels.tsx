@@ -134,6 +134,19 @@ const PROVIDER_STATUS_STYLES = {
   },
 } as const;
 
+function thresholdInputValue(value: number | null): string {
+  return value === null ? "" : String(value);
+}
+
+function parseThresholdInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function getProviderSummary(provider: ServerProvider | undefined) {
   if (!provider) {
     return {
@@ -461,6 +474,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     const defaultSettings = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
     return !Equal.equals(currentSettings, defaultSettings);
   });
+  const isQualityGateDirty = !Equal.equals(
+    settings.qualityGate,
+    DEFAULT_UNIFIED_SETTINGS.qualityGate,
+  );
 
   const changedSettingLabels = useMemo(
     () => [
@@ -485,10 +502,12 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(isGitWritingModelDirty ? ["Git writing model"] : []),
       ...(areProviderSettingsDirty ? ["Providers"] : []),
+      ...(isQualityGateDirty ? ["Quality guardrails"] : []),
     ],
     [
       areProviderSettingsDirty,
       isGitWritingModelDirty,
+      isQualityGateDirty,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.defaultThreadEnvMode,
@@ -601,6 +620,19 @@ export function GeneralSettingsPanel() {
   const isGitWritingModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
+  );
+  const qualityGate = settings.qualityGate;
+  const isQualityGateDirty = !Equal.equals(qualityGate, DEFAULT_UNIFIED_SETTINGS.qualityGate);
+  const updateQualityGate = useCallback(
+    (patch: Partial<typeof qualityGate>) => {
+      updateSettings({
+        qualityGate: {
+          ...qualityGate,
+          ...patch,
+        },
+      });
+    },
+    [qualityGate, updateSettings],
   );
 
   const openInPreferredEditor = useCallback(
@@ -1414,6 +1446,93 @@ export function GeneralSettingsPanel() {
             </div>
           );
         })}
+      </SettingsSection>
+
+      <SettingsSection title="Quality Guardrails">
+        <SettingsRow
+          title="Agent file-change gate"
+          description="Run project checks and maintainability thresholds after agent file changes."
+          resetAction={
+            isQualityGateDirty ? (
+              <SettingResetButton
+                label="quality guardrails"
+                onClick={() =>
+                  updateSettings({
+                    qualityGate: DEFAULT_UNIFIED_SETTINGS.qualityGate,
+                  })
+                }
+              />
+            ) : null
+          }
+          status={
+            qualityGate.enabled
+              ? "Failures are reported back into the next agent turn before unrelated work."
+              : "Disabled. Agent file changes will not be checked automatically."
+          }
+          control={
+            <Switch
+              checked={qualityGate.enabled}
+              onCheckedChange={(checked) => updateQualityGate({ enabled: Boolean(checked) })}
+            />
+          }
+        />
+        <SettingsRow
+          title="Project checks"
+          description="Use non-mutating repository commands to catch formatting, lint, and type errors."
+        >
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {(
+              [
+                ["format", "Format", "bun run fmt:check"],
+                ["lint", "Lint", "bun run lint"],
+                ["typecheck", "Typecheck", "bun run typecheck"],
+              ] as const
+            ).map(([key, label, command]) => (
+              <label
+                key={key}
+                className="flex items-center justify-between gap-3 rounded-xl border bg-muted/20 px-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium text-foreground">{label}</span>
+                  <code className="block truncate text-[11px] text-muted-foreground">
+                    {command}
+                  </code>
+                </span>
+                <Switch
+                  checked={qualityGate[key]}
+                  onCheckedChange={(checked) => updateQualityGate({ [key]: Boolean(checked) })}
+                />
+              </label>
+            ))}
+          </div>
+        </SettingsRow>
+        <SettingsRow
+          title="Maintainability thresholds"
+          description="Blank values disable that threshold. Metrics apply to changed JS/TS files."
+        >
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {(
+              [
+                ["maxFileLines", "File lines"],
+                ["maxFunctionLines", "Function lines"],
+                ["maxCyclomaticComplexity", "Cyclomatic complexity"],
+              ] as const
+            ).map(([key, label]) => (
+              <label key={key} className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">{label}</span>
+                <Input
+                  type="number"
+                  min={1}
+                  value={thresholdInputValue(qualityGate[key])}
+                  placeholder="Disabled"
+                  onChange={(event) =>
+                    updateQualityGate({ [key]: parseThresholdInput(event.target.value) })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title="Advanced">

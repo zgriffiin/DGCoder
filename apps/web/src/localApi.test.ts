@@ -52,6 +52,15 @@ const rpcClientMock = {
     searchEntries: vi.fn(),
     writeFile: vi.fn(),
   },
+  beans: {
+    getProjectState: vi.fn(),
+    init: vi.fn(),
+    list: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    archive: vi.fn(),
+    roadmap: vi.fn(),
+  },
   shell: {
     openInEditor: vi.fn(),
   },
@@ -366,6 +375,24 @@ describe("wsApi", () => {
       cwd: "/tmp/project",
       relativePath: "plan.md",
       contents: "# Plan\n",
+    });
+  });
+
+  it("forwards Beans list requests to the environment RPC", async () => {
+    rpcClientMock.beans.list.mockResolvedValue({ beans: [] });
+    const { createEnvironmentApi } = await import("./environmentApi");
+
+    const api = createEnvironmentApi(rpcClientMock as never);
+    await api.beans.list({
+      cwd: "/tmp/project",
+      search: "workflow",
+      includeBody: true,
+    });
+
+    expect(rpcClientMock.beans.list).toHaveBeenCalledWith({
+      cwd: "/tmp/project",
+      search: "workflow",
+      includeBody: true,
     });
   });
 
