@@ -1256,17 +1256,31 @@ describe("deriveActiveWorkStartedAt", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("advertises Claude as available while keeping Cursor as a placeholder", () => {
+  it("advertises supported agents as available while keeping Cursor as a placeholder", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
+    const kiro = PROVIDER_OPTIONS.find((option) => option.value === "kiro");
+    const amazonQ = PROVIDER_OPTIONS.find((option) => option.value === "amazonQ");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
+      { value: "kiro", label: "Kiro", available: true },
+      { value: "amazonQ", label: "Amazon Q", available: true },
       { value: "cursor", label: "Cursor", available: false },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",
       label: "Claude",
+      available: true,
+    });
+    expect(kiro).toEqual({
+      value: "kiro",
+      label: "Kiro",
+      available: true,
+    });
+    expect(amazonQ).toEqual({
+      value: "amazonQ",
+      label: "Amazon Q",
       available: true,
     });
     expect(cursor).toEqual({
