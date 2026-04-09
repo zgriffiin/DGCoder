@@ -2603,6 +2603,61 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect(
+    "routes websocket rpc subscribeOrchestrationDomainEvents without blocking live events behind sequence gaps",
+    () =>
+      Effect.gen(function* () {
+        const now = new Date().toISOString();
+        const threadId = ThreadId.makeUnsafe("thread-1");
+        const makeEvent = (sequence: number): OrchestrationEvent =>
+          ({
+            sequence,
+            eventId: `event-${sequence}`,
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: now,
+            commandId: null,
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            type: "thread.reverted",
+            payload: {
+              threadId,
+              turnCount: sequence,
+            },
+          }) as OrchestrationEvent;
+
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              getReadModel: () =>
+                Effect.succeed({
+                  ...makeDefaultOrchestrationReadModel(),
+                  snapshotSequence: 1,
+                }),
+              readEvents: () => Stream.empty,
+              streamDomainEvents: Stream.make(makeEvent(3)),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const events = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeOrchestrationDomainEvents]({}).pipe(
+              Stream.take(1),
+              Stream.runCollect,
+            ),
+          ),
+        );
+
+        assert.deepEqual(
+          Array.from(events).map((event) => event.sequence),
+          [3],
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("enriches replayed project events only once before streaming them to subscribers", () =>
     Effect.gen(function* () {
       let resolveCalls = 0;

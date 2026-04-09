@@ -510,59 +510,53 @@ const WsRpcLayer = WsRpcGroup.toLayer(
           Effect.gen(function* () {
             const snapshot = yield* orchestrationEngine.getReadModel();
             const fromSequenceExclusive = snapshot.snapshotSequence;
-            const replayEvents: Array<OrchestrationEvent> = yield* Stream.runCollect(
-              orchestrationEngine.readEvents(fromSequenceExclusive),
-            ).pipe(
-              Effect.map((events) => Array.from(events)),
-              Effect.flatMap(enrichOrchestrationEvents),
-              Effect.catch(() => Effect.succeed([] as Array<OrchestrationEvent>)),
+            const replayStream = orchestrationEngine.readEvents(fromSequenceExclusive).pipe(
+              Stream.mapEffect(enrichProjectEvent),
+              Stream.catch(() => Stream.empty),
             );
-            const replayStream = Stream.fromIterable(replayEvents);
             const liveStream = orchestrationEngine.streamDomainEvents.pipe(
               Stream.mapEffect(enrichProjectEvent),
             );
             const source = Stream.merge(replayStream, liveStream);
             type SequenceState = {
-              readonly nextSequence: number;
-              readonly pendingBySequence: Map<number, OrchestrationEvent>;
+              readonly seenOrder: ReadonlyArray<number>;
+              readonly seenSequences: ReadonlySet<number>;
             };
             const state = yield* Ref.make<SequenceState>({
-              nextSequence: fromSequenceExclusive + 1,
-              pendingBySequence: new Map<number, OrchestrationEvent>(),
+              seenOrder: [],
+              seenSequences: new Set(),
             });
+            const maxSeenSequences = 10_000;
 
             return source.pipe(
-              Stream.mapEffect((event) =>
-                Ref.modify(
-                  state,
-                  ({
-                    nextSequence,
-                    pendingBySequence,
-                  }): [Array<OrchestrationEvent>, SequenceState] => {
-                    if (event.sequence < nextSequence || pendingBySequence.has(event.sequence)) {
-                      return [[], { nextSequence, pendingBySequence }];
+              Stream.filterEffect((event) =>
+                Ref.modify(state, ({ seenOrder, seenSequences }): [boolean, SequenceState] => {
+                  if (
+                    event.sequence <= fromSequenceExclusive ||
+                    seenSequences.has(event.sequence)
+                  ) {
+                    return [false, { seenOrder, seenSequences }];
+                  }
+
+                  const nextSeenSequences = new Set(seenSequences);
+                  nextSeenSequences.add(event.sequence);
+                  const nextSeenOrder = [...seenOrder, event.sequence];
+                  while (nextSeenOrder.length > maxSeenSequences) {
+                    const removedSequence = nextSeenOrder.shift();
+                    if (removedSequence !== undefined) {
+                      nextSeenSequences.delete(removedSequence);
                     }
+                  }
 
-                    const updatedPending = new Map(pendingBySequence);
-                    updatedPending.set(event.sequence, event);
-
-                    const emit: Array<OrchestrationEvent> = [];
-                    let expected = nextSequence;
-                    for (;;) {
-                      const expectedEvent = updatedPending.get(expected);
-                      if (!expectedEvent) {
-                        break;
-                      }
-                      emit.push(expectedEvent);
-                      updatedPending.delete(expected);
-                      expected += 1;
-                    }
-
-                    return [emit, { nextSequence: expected, pendingBySequence: updatedPending }];
-                  },
-                ),
+                  return [
+                    true,
+                    {
+                      seenOrder: nextSeenOrder,
+                      seenSequences: nextSeenSequences,
+                    },
+                  ];
+                }),
               ),
-              Stream.flatMap((events) => Stream.fromIterable(events)),
             );
           }),
           { "rpc.aggregate": "orchestration" },

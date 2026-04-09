@@ -144,4 +144,50 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Context compacted");
     expect(markup).toContain("Work log");
   });
+
+  it("marks detailed work log entries as openable", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-quality-gate",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-quality-gate",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Quality gate failed",
+              tone: "error",
+              detail: "Quality gate failed after agent file changes.\n- file.ts has 900 lines.",
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        activeThreadEnvironmentId={ACTIVE_THREAD_ENVIRONMENT_ID}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Quality gate failed");
+    expect(markup).toContain("Open full work log detail");
+  });
 });

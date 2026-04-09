@@ -611,13 +611,16 @@ function EventRouter() {
           } else if (replayCompletion.shouldReplay && import.meta.env.MODE !== "test") {
             console.warn(
               "[orchestration-recovery]",
-              "Stopping replay recovery after no-progress retries.",
+              "Falling back to snapshot recovery after no-progress replay retries.",
               {
                 clientKey: entry.key,
                 environmentId: boundEnvironmentId,
                 state: recovery.getState(),
               },
             );
+            void fallbackToSnapshotRecovery();
+          } else if (replayCompletion.shouldReplay) {
+            void fallbackToSnapshotRecovery();
           }
         }
       };
