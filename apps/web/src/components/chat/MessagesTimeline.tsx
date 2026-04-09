@@ -61,6 +61,14 @@ import {
   formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 
@@ -846,10 +854,102 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
+function WorkEntryPreviewSuffix(props: { preview: string | null; rawCommand: string | null }) {
+  if (!props.preview) return null;
+  if (!props.rawCommand) {
+    return <span className="text-muted-foreground/55"> - {props.preview}</span>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        closeDelay={0}
+        delay={75}
+        render={
+          <span className="max-w-full cursor-default text-muted-foreground/55 transition-colors hover:text-muted-foreground/75 focus-visible:text-muted-foreground/75">
+            {" "}
+            - {props.preview}
+          </span>
+        }
+      />
+      <TooltipPopup
+        align="start"
+        className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
+        side="top"
+      >
+        <div className="max-w-[min(56rem,calc(100vw-2rem))] overflow-x-auto px-1.5 py-1 font-mono text-[11px] leading-4 whitespace-nowrap">
+          {props.rawCommand}
+        </div>
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function WorkEntryTextLine(props: {
+  heading: string;
+  preview: string | null;
+  rawCommand: string | null;
+  tone: TimelineWorkEntry["tone"];
+  displayText: string;
+  onOpenDetail?: () => void;
+}) {
+  const content = (
+    <>
+      <span className={cn("text-foreground/80", workToneClass(props.tone))}>{props.heading}</span>
+      <WorkEntryPreviewSuffix preview={props.preview} rawCommand={props.rawCommand} />
+    </>
+  );
+  const className = cn(
+    "truncate text-[11px] leading-5",
+    workToneClass(props.tone),
+    props.preview ? "text-muted-foreground/70" : "",
+  );
+  if (!props.onOpenDetail) {
+    return (
+      <p className={className} title={props.rawCommand ? undefined : props.displayText}>
+        {content}
+      </p>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={cn(className, "block max-w-full cursor-pointer text-left hover:underline")}
+      onClick={props.onOpenDetail}
+      title="Open full work log detail"
+    >
+      {content}
+    </button>
+  );
+}
+
+function WorkEntryDetailDialog(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  heading: string;
+  detail: string;
+}) {
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogPopup className="max-h-[min(86vh,48rem)] max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>{props.heading}</DialogTitle>
+          <DialogDescription>Complete work log detail.</DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="pt-0">
+          <pre className="max-h-[min(62vh,36rem)] overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg border border-border/70 bg-background/80 p-3 font-mono text-xs leading-5 text-foreground">
+            {props.detail}
+          </pre>
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
 }) {
   const { workEntry } = props;
+  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
@@ -858,6 +958,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const detail = workEntry.detail?.trim() ?? "";
 
   return (
     <div className="rounded-lg px-1 py-1">
@@ -869,44 +970,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         </span>
         <div className="min-w-0 flex-1 overflow-hidden">
           <div className="max-w-full">
-            <p
-              className={cn(
-                "truncate text-[11px] leading-5",
-                workToneClass(workEntry.tone),
-                preview ? "text-muted-foreground/70" : "",
-              )}
-              title={rawCommand ? undefined : displayText}
-            >
-              <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-                {heading}
-              </span>
-              {preview &&
-                (rawCommand ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      closeDelay={0}
-                      delay={75}
-                      render={
-                        <span className="max-w-full cursor-default text-muted-foreground/55 transition-colors hover:text-muted-foreground/75 focus-visible:text-muted-foreground/75">
-                          {" "}
-                          - {preview}
-                        </span>
-                      }
-                    />
-                    <TooltipPopup
-                      align="start"
-                      className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
-                      side="top"
-                    >
-                      <div className="max-w-[min(56rem,calc(100vw-2rem))] overflow-x-auto px-1.5 py-1 font-mono text-[11px] leading-4 whitespace-nowrap">
-                        {rawCommand}
-                      </div>
-                    </TooltipPopup>
-                  </Tooltip>
-                ) : (
-                  <span className="text-muted-foreground/55"> - {preview}</span>
-                ))}
-            </p>
+            <WorkEntryTextLine
+              heading={heading}
+              preview={preview}
+              rawCommand={rawCommand}
+              tone={workEntry.tone}
+              displayText={displayText}
+              {...(detail ? { onOpenDetail: () => setDetailDialogOpen(true) } : {})}
+            />
           </div>
         </div>
       </div>
@@ -927,6 +998,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </span>
           )}
         </div>
+      )}
+      {detail && (
+        <WorkEntryDetailDialog
+          open={detailDialogOpen}
+          onOpenChange={setDetailDialogOpen}
+          heading={heading}
+          detail={detail}
+        />
       )}
     </div>
   );
