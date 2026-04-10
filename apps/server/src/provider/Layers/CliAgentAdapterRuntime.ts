@@ -13,6 +13,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import type { CliAgentCommandSettings } from "@t3tools/shared/cliAgentCommand";
 import { Effect, Fiber, Queue, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -36,7 +37,7 @@ export type CliAgentProvider = Extract<ProviderKind, "kiro" | "amazonQ">;
 export interface CliAgentAdapterConfig {
   readonly provider: CliAgentProvider;
   readonly displayName: string;
-  readonly selectBinaryPath: (settings: ServerSettings) => string;
+  readonly selectCommandSettings: (settings: ServerSettings) => CliAgentCommandSettings;
   readonly buildTurnArgs: (input: {
     readonly prompt: string;
     readonly model: string | undefined;
@@ -392,7 +393,7 @@ export class CliAgentAdapterRuntime {
     turnId: TurnId,
     settings: ServerSettings,
   ) {
-    const binaryPath = this.config.selectBinaryPath(settings);
+    const commandSettings = this.config.selectCommandSettings(settings);
     return runCliAgentTurn({
       config: this.config,
       spawner: this.services.spawner,
@@ -400,7 +401,7 @@ export class CliAgentAdapterRuntime {
       context,
       input,
       turnId,
-      binaryPath,
+      commandSettings,
       completeFailure: (message) => this.completeTurnFailure(context, turnId, message),
     }).pipe(
       Effect.catchCause((cause) =>

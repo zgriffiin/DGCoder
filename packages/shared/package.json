@@ -51,6 +51,18 @@
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
+    },
+    "./amazonQ": {
+      "types": "./src/amazonQ.ts",
+      "import": "./src/amazonQ.ts"
+    },
+    "./cliAgentCommand": {
+      "types": "./src/cliAgentCommand.ts",
+      "import": "./src/cliAgentCommand.ts"
+    },
+    "./terminalText": {
+      "types": "./src/terminalText.ts",
+      "import": "./src/terminalText.ts"
     }
   },
   "scripts": {

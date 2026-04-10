@@ -419,6 +419,12 @@ Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelection>> =
   Object.freeze({});
+const COMPOSER_MODEL_PROVIDERS: readonly ProviderKind[] = [
+  "codex",
+  "claudeAgent",
+  "kiro",
+  "amazonQ",
+];
 
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
@@ -517,7 +523,9 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
-  return value === "codex" || value === "claudeAgent" ? value : null;
+  return typeof value === "string" && COMPOSER_MODEL_PROVIDERS.includes(value as ProviderKind)
+    ? (value as ProviderKind)
+    : null;
 }
 
 function normalizeProviderModelOptions(
@@ -533,6 +541,14 @@ function normalizeProviderModelOptions(
   const claudeCandidate =
     candidate?.claudeAgent && typeof candidate.claudeAgent === "object"
       ? (candidate.claudeAgent as Record<string, unknown>)
+      : null;
+  const kiroCandidate =
+    candidate?.kiro && typeof candidate.kiro === "object"
+      ? (candidate.kiro as Record<string, unknown>)
+      : null;
+  const amazonQCandidate =
+    candidate?.amazonQ && typeof candidate.amazonQ === "object"
+      ? (candidate.amazonQ as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -602,12 +618,17 @@ function normalizeProviderModelOptions(
         }
       : undefined;
 
-  if (!codex && !claude) {
+  const kiro = kiroCandidate ? {} : undefined;
+  const amazonQ = amazonQCandidate ? {} : undefined;
+
+  if (!codex && !claude && !kiro && !amazonQ) {
     return null;
   }
   return {
     ...(codex ? { codex } : {}),
     ...(claude ? { claudeAgent: claude } : {}),
+    ...(kiro ? { kiro } : {}),
+    ...(amazonQ ? { amazonQ } : {}),
   };
 }
 
@@ -638,7 +659,7 @@ function normalizeModelSelection(
     provider,
     provider === "codex" ? legacy?.legacyCodex : undefined,
   );
-  const options = provider === "codex" ? modelOptions?.codex : modelOptions?.claudeAgent;
+  const options = modelOptions?.[provider];
   return {
     provider,
     model,
@@ -704,7 +725,7 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent"] as const) {
+    for (const provider of COMPOSER_MODEL_PROVIDERS) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         result[provider] = {
@@ -2214,7 +2235,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
             const base = existing ?? createEmptyThreadDraft();
             const nextMap = { ...base.modelSelectionByProvider };
-            for (const provider of ["codex", "claudeAgent"] as const) {
+            for (const provider of COMPOSER_MODEL_PROVIDERS) {
               // Only touch providers explicitly present in the input
               if (!normalizedOpts || !(provider in normalizedOpts)) continue;
               const opts = normalizedOpts[provider];

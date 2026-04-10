@@ -20,6 +20,11 @@ import {
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import {
+  buildAmazonQIdentityCenterLoginCommand,
+  hasAmazonQIdentityCenterLoginSettings,
+} from "@t3tools/shared/amazonQ";
+import { buildCliAgentLoginCommand } from "@t3tools/shared/cliAgentCommand";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Equal } from "effect";
 import { APP_VERSION } from "../../branding";
@@ -131,7 +136,7 @@ const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     provider: "amazonQ",
     title: "Amazon Q",
     binaryPlaceholder: "Amazon Q binary path",
-    binaryDescription: "Path to the Amazon Q binary",
+    binaryDescription: "Path to the Amazon Q binary.",
     customModelPlaceholder: "amazon-q-model",
   },
 ] as const;
@@ -578,14 +583,9 @@ export function GeneralSettingsPanel() {
         DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
       settings.providers.claudeAgent.customModels.length > 0,
     ),
-    kiro: Boolean(
-      settings.providers.kiro.binaryPath !== DEFAULT_UNIFIED_SETTINGS.providers.kiro.binaryPath ||
-      settings.providers.kiro.customModels.length > 0,
-    ),
+    kiro: Boolean(!Equal.equals(settings.providers.kiro, DEFAULT_UNIFIED_SETTINGS.providers.kiro)),
     amazonQ: Boolean(
-      settings.providers.amazonQ.binaryPath !==
-        DEFAULT_UNIFIED_SETTINGS.providers.amazonQ.binaryPath ||
-      settings.providers.amazonQ.customModels.length > 0,
+      !Equal.equals(settings.providers.amazonQ, DEFAULT_UNIFIED_SETTINGS.providers.amazonQ),
     ),
   });
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
@@ -1170,6 +1170,20 @@ export function GeneralSettingsPanel() {
           const customModelError = customModelErrorByProvider[providerCard.provider] ?? null;
           const providerDisplayName =
             PROVIDER_DISPLAY_NAMES[providerCard.provider] ?? providerCard.title;
+          const kiroSettings = providerCard.provider === "kiro" ? settings.providers.kiro : null;
+          const kiroRunsInWsl =
+            kiroSettings?.executionMode === "auto" || kiroSettings?.executionMode === "wsl";
+          const kiroLoginCommand = kiroSettings
+            ? buildCliAgentLoginCommand(kiroSettings, { platform: "win32" })
+            : null;
+          const amazonQSettings =
+            providerCard.provider === "amazonQ" ? settings.providers.amazonQ : null;
+          const amazonQLoginCommand = amazonQSettings
+            ? buildAmazonQIdentityCenterLoginCommand(amazonQSettings)
+            : null;
+          const amazonQHasIdentityCenterSettings = amazonQSettings
+            ? hasAmazonQIdentityCenterLoginSettings(amazonQSettings)
+            : false;
 
           return (
             <div key={providerCard.provider} className="border-t border-border first:border-t-0">
@@ -1336,6 +1350,145 @@ export function GeneralSettingsPanel() {
                             </span>
                           ) : null}
                         </label>
+                      </div>
+                    ) : null}
+
+                    {kiroSettings ? (
+                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 space-y-1">
+                            <div className="text-xs font-medium text-foreground">WSL execution</div>
+                            <p className="text-xs text-muted-foreground">
+                              Auto uses WSL on Windows and host execution elsewhere.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={kiroRunsInWsl}
+                            onCheckedChange={(checked) =>
+                              updateSettings({
+                                providers: {
+                                  ...settings.providers,
+                                  kiro: {
+                                    ...settings.providers.kiro,
+                                    executionMode: checked ? "wsl" : "host",
+                                  },
+                                },
+                              })
+                            }
+                            aria-label="Run Kiro through WSL"
+                          />
+                        </div>
+                        {kiroRunsInWsl ? (
+                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                            <label htmlFor="provider-install-kiro-wsl-distro" className="block">
+                              <span className="text-xs font-medium text-foreground">
+                                WSL distro
+                              </span>
+                              <Input
+                                id="provider-install-kiro-wsl-distro"
+                                className="mt-1.5"
+                                value={kiroSettings.wslDistro}
+                                onChange={(event) =>
+                                  updateSettings({
+                                    providers: {
+                                      ...settings.providers,
+                                      kiro: {
+                                        ...settings.providers.kiro,
+                                        wslDistro: event.target.value,
+                                      },
+                                    },
+                                  })
+                                }
+                                placeholder="Default distro"
+                                spellCheck={false}
+                              />
+                            </label>
+                          </div>
+                        ) : null}
+                        {kiroLoginCommand ? (
+                          <div className="mt-3 rounded-lg border border-border/70 bg-muted/18 px-3 py-2">
+                            <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                              Login command
+                            </div>
+                            <code className="mt-1 block break-all text-xs text-foreground">
+                              {kiroLoginCommand}
+                            </code>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {amazonQSettings ? (
+                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                        <div className="text-xs font-medium text-foreground">
+                          IAM Identity Center SSO
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Amazon Q Pro uses your organization&apos;s Start URL and Region for SSO.
+                        </p>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <label
+                            htmlFor="provider-install-amazon-q-identity-provider-url"
+                            className="block"
+                          >
+                            <span className="text-xs font-medium text-foreground">Start URL</span>
+                            <Input
+                              id="provider-install-amazon-q-identity-provider-url"
+                              className="mt-1.5"
+                              value={amazonQSettings.identityProviderUrl}
+                              onChange={(event) =>
+                                updateSettings({
+                                  providers: {
+                                    ...settings.providers,
+                                    amazonQ: {
+                                      ...settings.providers.amazonQ,
+                                      identityProviderUrl: event.target.value,
+                                    },
+                                  },
+                                })
+                              }
+                              placeholder="https://example.awsapps.com/start"
+                              spellCheck={false}
+                            />
+                          </label>
+                          <label
+                            htmlFor="provider-install-amazon-q-identity-center-region"
+                            className="block"
+                          >
+                            <span className="text-xs font-medium text-foreground">Region</span>
+                            <Input
+                              id="provider-install-amazon-q-identity-center-region"
+                              className="mt-1.5"
+                              value={amazonQSettings.identityCenterRegion}
+                              onChange={(event) =>
+                                updateSettings({
+                                  providers: {
+                                    ...settings.providers,
+                                    amazonQ: {
+                                      ...settings.providers.amazonQ,
+                                      identityCenterRegion: event.target.value,
+                                    },
+                                  },
+                                })
+                              }
+                              placeholder="us-east-1"
+                              spellCheck={false}
+                            />
+                          </label>
+                        </div>
+                        <div className="mt-3 rounded-lg border border-border/70 bg-muted/18 px-3 py-2">
+                          <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                            Login command
+                          </div>
+                          <code className="mt-1 block break-all text-xs text-foreground">
+                            {amazonQLoginCommand}
+                          </code>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {amazonQHasIdentityCenterSettings
+                              ? "Run this in a terminal, complete SSO in the browser, then refresh provider status."
+                              : "Enter both fields to prefill the IAM Identity Center SSO command."}
+                          </p>
+                        </div>
                       </div>
                     ) : null}
 

@@ -32,14 +32,14 @@ function makeCliAgentAdapter(config: CliAgentAdapterConfig) {
 const KIRO_ADAPTER_CONFIG: CliAgentAdapterConfig = {
   provider: "kiro",
   displayName: "Kiro",
-  selectBinaryPath: (settings) => settings.providers.kiro.binaryPath,
+  selectCommandSettings: (settings) => settings.providers.kiro,
   buildTurnArgs: ({ prompt }) => ["chat", "--no-interactive", "--trust-all-tools", prompt],
 };
 
 const AMAZON_Q_ADAPTER_CONFIG: CliAgentAdapterConfig = {
   provider: "amazonQ",
   displayName: "Amazon Q",
-  selectBinaryPath: (settings) => settings.providers.amazonQ.binaryPath,
+  selectCommandSettings: (settings) => settings.providers.amazonQ,
   buildTurnArgs: ({ prompt }) => ["chat", "--no-interactive", "--trust-all-tools", prompt],
 };
 

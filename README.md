@@ -2,14 +2,14 @@
 
 T3 Code is a minimal web GUI for coding agents. This DGCoder fork is still an early
 WIP, focused on provider reliability, recoverable sessions, and local workflow tools
-that make long-running agent work easier to inspect. Thanks to the T3 team and the 
-community for the core application, concepts and helping with understanding this 
-industry. 
+that make long-running agent work easier to inspect. Thanks to the T3 team and the
+community for the core application, concepts and helping with understanding this
+industry.
 
 Me
 
-I'm not a developer, I am an Engineer (of the electrical/ mechanical type). Theo and 
-others have helped me get to this point, with AI of course. 
+I'm not a developer, I am an Engineer (of the electrical/ mechanical type). Theo and
+others have helped me get to this point, with AI of course.
 
 ## Current State
 

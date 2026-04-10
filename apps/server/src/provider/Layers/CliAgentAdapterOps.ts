@@ -7,6 +7,12 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import {
+  resolveCliAgentCommand,
+  type CliAgentCommandSettings,
+  type ResolvedCliAgentCommand,
+} from "@t3tools/shared/cliAgentCommand";
+import { normalizeCliAgentTerminalOutput } from "@t3tools/shared/terminalText";
 import { Effect, Fiber } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -30,7 +36,7 @@ interface CliAgentTurnInput extends CliAgentOperationBase {
   readonly context: CliAgentSessionContext;
   readonly input: ProviderSendTurnInput;
   readonly turnId: TurnId;
-  readonly binaryPath: string;
+  readonly commandSettings: CliAgentCommandSettings;
   readonly completeFailure: (message: string) => Effect.Effect<void>;
 }
 
@@ -66,7 +72,7 @@ function asItemId(value: string): RuntimeItemId {
 }
 
 function trimOutput(value: string): string {
-  return value.trim();
+  return normalizeCliAgentTerminalOutput(value).trim();
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -74,15 +80,13 @@ function toMessage(cause: unknown, fallback: string): string {
 }
 
 const runCommand = Effect.fn("runCommand")(function* (input: {
-  readonly binaryPath: string;
-  readonly args: ReadonlyArray<string>;
-  readonly cwd?: string;
+  readonly commandSpec: ResolvedCliAgentCommand;
 }) {
-  const command = ChildProcess.make(input.binaryPath, [...input.args], {
-    shell: process.platform === "win32",
-    ...(input.cwd ? { cwd: input.cwd } : {}),
+  const command = ChildProcess.make(input.commandSpec.command, [...input.commandSpec.args], {
+    shell: input.commandSpec.shell,
+    ...(input.commandSpec.cwd ? { cwd: input.commandSpec.cwd } : {}),
   });
-  return yield* spawnAndCollect(input.binaryPath, command);
+  return yield* spawnAndCollect(input.commandSpec.command, command);
 });
 
 export const runCliAgentTurn = Effect.fn("runCliAgentTurn")(function* (input: CliAgentTurnInput) {
@@ -92,14 +96,17 @@ export const runCliAgentTurn = Effect.fn("runCliAgentTurn")(function* (input: Cl
       ? input.input.modelSelection.model
       : undefined;
   const args = input.config.buildTurnArgs({ prompt, model });
+  const commandSpec = resolveCliAgentCommand(
+    input.commandSettings,
+    args,
+    input.context.session.cwd ? { cwd: input.context.session.cwd } : {},
+  );
   const taskId = asTaskId(`cli:${input.turnId}`);
   const itemId = asItemId(`assistant:${input.turnId}`);
 
   yield* emitTaskStarted(input, taskId);
   const result = yield* runCommand({
-    binaryPath: input.binaryPath,
-    args,
-    ...(input.context.session.cwd ? { cwd: input.context.session.cwd } : {}),
+    commandSpec,
   }).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, input.spawner),
     Effect.result,

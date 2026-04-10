@@ -108,6 +108,29 @@ const TEST_PROVIDERS: ReadonlyArray<ServerProvider> = [
       },
     ],
   },
+  {
+    provider: "kiro",
+    enabled: true,
+    installed: true,
+    version: "1.23.1",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: new Date().toISOString(),
+    models: [
+      {
+        slug: "default",
+        name: "Kiro default",
+        isCustom: false,
+        capabilities: {
+          reasoningEffortLevels: [],
+          supportsFastMode: false,
+          supportsThinkingToggle: false,
+          contextWindowOptions: [],
+          promptInjectedEffortLevels: [],
+        },
+      },
+    ],
+  },
 ];
 
 function buildCodexProvider(models: ServerProvider["models"]): ServerProvider {
@@ -181,6 +204,7 @@ describe("ProviderModelPicker", () => {
         const text = document.body.textContent ?? "";
         expect(text).toContain("Codex");
         expect(text).toContain("Claude");
+        expect(text).toContain("Kiro");
         expect(text).not.toContain("Claude Sonnet 4.6");
       });
     } finally {
@@ -356,6 +380,24 @@ describe("ProviderModelPicker", () => {
         "claudeAgent",
         "claude-sonnet-4-6",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("dispatches Kiro when its default model is selected", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitem", { name: "Kiro" }).hover();
+      await page.getByRole("menuitemradio", { name: "Kiro default" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith("kiro", "default");
     } finally {
       await mounted.cleanup();
     }
