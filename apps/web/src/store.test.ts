@@ -364,6 +364,32 @@ describe("store read model sync", () => {
     expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-sonnet-4-6");
   });
 
+  it("preserves Kiro session providers from the read model", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        modelSelection: {
+          provider: "kiro",
+          model: "default",
+        },
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "kiro",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel, localEnvironmentId);
+
+    expect(threadsOf(next)[0]?.modelSelection.provider).toBe("kiro");
+    expect(threadsOf(next)[0]?.session?.provider).toBe("kiro");
+  });
+
   it("preserves project and thread updatedAt timestamps from the read model", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(

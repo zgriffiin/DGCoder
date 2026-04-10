@@ -1,4 +1,5 @@
 import type {
+  CliAgentExecutionMode,
   ModelCapabilities,
   ProviderKind,
   ServerSettings,
@@ -7,6 +8,13 @@ import type {
   ServerProviderModel,
   ServerProviderState,
 } from "@t3tools/contracts";
+import { buildAmazonQIdentityCenterLoginCommand } from "@t3tools/shared/amazonQ";
+import {
+  buildCliAgentLoginCommand,
+  resolveCliAgentCommand,
+  type CliAgentCommandSettings,
+  type ResolvedCliAgentCommand,
+} from "@t3tools/shared/cliAgentCommand";
 import { Effect, Equal, Layer, Option, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -27,9 +35,13 @@ import { ServerSettingsService } from "../../serverSettings";
 import { KiroProvider } from "../Services/KiroProvider";
 import { AmazonQProvider } from "../Services/AmazonQProvider";
 
-interface CliAgentSettings {
+interface CliAgentSettings extends CliAgentCommandSettings {
   readonly enabled: boolean;
   readonly binaryPath: string;
+  readonly executionMode?: CliAgentExecutionMode;
+  readonly wslDistro?: string;
+  readonly identityProviderUrl?: string;
+  readonly identityCenterRegion?: string;
   readonly customModels: ReadonlyArray<string>;
 }
 
@@ -41,6 +53,7 @@ interface CliAgentProviderConfig {
   readonly versionCommands: ReadonlyArray<ReadonlyArray<string>>;
   readonly authCommand: ReadonlyArray<string>;
   readonly loginCommand: string;
+  readonly buildLoginCommand?: (settings: CliAgentSettings) => string;
   readonly disabledMessage: string;
   readonly selectSettings: (settings: ServerSettings) => CliAgentSettings;
 }
@@ -83,18 +96,65 @@ function includesAnyMarker(value: string, markers: ReadonlyArray<string>): boole
 }
 
 function unauthenticatedAuthStatus(
-  config: Pick<CliAgentProviderConfig, "displayName" | "loginCommand">,
+  config: Pick<CliAgentProviderConfig, "displayName" | "loginCommand" | "buildLoginCommand">,
+  settings?: CliAgentSettings,
 ) {
+  const loginCommand = settings ? config.buildLoginCommand?.(settings) : null;
   return {
     status: "error" as const,
     auth: { status: "unauthenticated" as const },
-    message: `${config.displayName} is not authenticated. Run \`${config.loginCommand}\` and try again.`,
+    message: `${config.displayName} is not authenticated. Run \`${loginCommand ?? config.loginCommand}\` and try again.`,
   };
 }
 
-function parseAuthBooleanFromJson(stdout: string): {
+function providerAuthFromAccountType(accountType: string): ServerProviderAuth {
+  const normalized = accountType.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized === "builderid") {
+    return { status: "authenticated", type: "builder-id", label: "Builder ID" };
+  }
+  if (normalized === "iamidentitycenter" || normalized === "identitycenter") {
+    return {
+      status: "authenticated",
+      type: "iam-identity-center",
+      label: "IAM Identity Center",
+    };
+  }
+  return { status: "authenticated", type: accountType, label: accountType };
+}
+
+function authFromJsonValue(value: unknown): ServerProviderAuth | undefined {
+  const authBoolean = extractAuthBoolean(value);
+  if (authBoolean !== undefined) {
+    return { status: authBoolean ? "authenticated" : "unauthenticated" };
+  }
+
+  if (globalThis.Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = authFromJsonValue(entry);
+      if (nested !== undefined) return nested;
+    }
+    return undefined;
+  }
+
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  if (record.account === null) {
+    return { status: "unauthenticated" };
+  }
+  if (typeof record.accountType === "string" && record.accountType.trim().length > 0) {
+    return providerAuthFromAccountType(record.accountType.trim());
+  }
+  for (const key of ["account", "auth", "status", "session"] as const) {
+    const nested = authFromJsonValue(record[key]);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+function parseAuthFromJson(stdout: string): {
   readonly attemptedJsonParse: boolean;
-  readonly auth: boolean | undefined;
+  readonly auth: ServerProviderAuth | undefined;
 } {
   const trimmed = stdout.trim();
   if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
@@ -103,7 +163,7 @@ function parseAuthBooleanFromJson(stdout: string): {
   try {
     return {
       attemptedJsonParse: true,
-      auth: extractAuthBoolean(JSON.parse(trimmed)),
+      auth: authFromJsonValue(JSON.parse(trimmed)),
     };
   } catch {
     return { attemptedJsonParse: false, auth: undefined };
@@ -112,14 +172,15 @@ function parseAuthBooleanFromJson(stdout: string): {
 
 function statusFromParsedAuth(
   result: CommandResult,
-  config: Pick<CliAgentProviderConfig, "displayName" | "loginCommand">,
-  parsedAuth: ReturnType<typeof parseAuthBooleanFromJson>,
+  config: Pick<CliAgentProviderConfig, "displayName" | "loginCommand" | "buildLoginCommand">,
+  parsedAuth: ReturnType<typeof parseAuthFromJson>,
+  settings?: CliAgentSettings,
 ) {
-  if (parsedAuth.auth === true) {
-    return { status: "ready" as const, auth: { status: "authenticated" as const } };
+  if (parsedAuth.auth?.status === "authenticated") {
+    return { status: "ready" as const, auth: parsedAuth.auth };
   }
-  if (parsedAuth.auth === false) {
-    return unauthenticatedAuthStatus(config);
+  if (parsedAuth.auth?.status === "unauthenticated") {
+    return unauthenticatedAuthStatus(config, settings);
   }
   if (parsedAuth.attemptedJsonParse) {
     return {
@@ -143,10 +204,11 @@ function statusFromParsedAuth(
 
 function parseCliAuthStatusFromOutput(
   result: CommandResult,
-  config: Pick<CliAgentProviderConfig, "displayName" | "loginCommand">,
+  config: Pick<CliAgentProviderConfig, "displayName" | "loginCommand" | "buildLoginCommand">,
+  settings?: CliAgentSettings,
 ): {
   readonly status: Exclude<ServerProviderState, "disabled">;
-  readonly auth: Pick<ServerProviderAuth, "status">;
+  readonly auth: ServerProviderAuth;
   readonly message?: string;
 } {
   const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
@@ -158,30 +220,28 @@ function parseCliAuthStatusFromOutput(
     };
   }
   if (includesAnyMarker(lowerOutput, UNAUTHENTICATED_OUTPUT_MARKERS)) {
-    return unauthenticatedAuthStatus(config);
+    return unauthenticatedAuthStatus(config, settings);
   }
-  return statusFromParsedAuth(result, config, parseAuthBooleanFromJson(result.stdout));
+  return statusFromParsedAuth(result, config, parseAuthFromJson(result.stdout), settings);
 }
 
-const runCliCommand = Effect.fn("runCliCommand")(function* (
-  binaryPath: string,
-  args: ReadonlyArray<string>,
-) {
-  const command = ChildProcess.make(binaryPath, [...args], {
-    shell: process.platform === "win32",
+const runCliCommand = Effect.fn("runCliCommand")(function* (input: ResolvedCliAgentCommand) {
+  const command = ChildProcess.make(input.command, [...input.args], {
+    shell: input.shell,
+    ...(input.cwd ? { cwd: input.cwd } : {}),
   });
-  return yield* spawnAndCollect(binaryPath, command);
+  return yield* spawnAndCollect(input.command, command);
 });
 
 const runFirstSuccessfulCommand = Effect.fn("runFirstSuccessfulCommand")(function* (
-  binaryPath: string,
+  settings: CliAgentSettings,
   commands: ReadonlyArray<ReadonlyArray<string>>,
 ) {
   let lastResult: CommandResult | undefined;
   let lastError: unknown;
 
   for (const args of commands) {
-    const result = yield* runCliCommand(binaryPath, args).pipe(Effect.result);
+    const result = yield* runCliCommand(resolveCliAgentCommand(settings, args)).pipe(Effect.result);
     if (Result.isFailure(result)) {
       lastError = result.failure;
       continue;
@@ -362,7 +422,7 @@ function authenticatedSnapshot(
   parsedVersion: string | null,
   authResult: CommandResult,
 ) {
-  const parsed = parseCliAuthStatusFromOutput(authResult, input.config);
+  const parsed = parseCliAuthStatusFromOutput(authResult, input.config, input.settings);
   return buildCliProviderSnapshot({
     ...input,
     probe: {
@@ -408,7 +468,7 @@ export const checkCliAgentProviderStatus = Effect.fn("checkCliAgentProviderStatu
   }
 
   const versionProbe = yield* runFirstSuccessfulCommand(
-    providerSettings.binaryPath,
+    providerSettings,
     config.versionCommands,
   ).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
 
@@ -426,10 +486,9 @@ export const checkCliAgentProviderStatus = Effect.fn("checkCliAgentProviderStatu
     return versionNonZeroSnapshot(snapshotInput, version);
   }
 
-  const authProbe = yield* runCliCommand(providerSettings.binaryPath, config.authCommand).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
+  const authProbe = yield* runCliCommand(
+    resolveCliAgentCommand(providerSettings, config.authCommand),
+  ).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(authProbe)) {
     return authProbeFailureSnapshot(snapshotInput, parsedVersion, authProbe.failure);
@@ -450,6 +509,7 @@ export const KIRO_PROVIDER_CONFIG: CliAgentProviderConfig = {
   versionCommands: [["--version"], ["version"]],
   authCommand: ["whoami", "--format", "json"],
   loginCommand: "kiro-cli login",
+  buildLoginCommand: buildCliAgentLoginCommand,
   disabledMessage: "Kiro is disabled in T3 Code settings.",
   selectSettings: (settings) => settings.providers.kiro,
 };
@@ -462,6 +522,7 @@ export const AMAZON_Q_PROVIDER_CONFIG: CliAgentProviderConfig = {
   versionCommands: [["--version"]],
   authCommand: ["whoami", "--format", "json"],
   loginCommand: "q login",
+  buildLoginCommand: buildAmazonQIdentityCenterLoginCommand,
   disabledMessage: "Amazon Q is disabled in T3 Code settings.",
   selectSettings: (settings) => settings.providers.amazonQ,
 };

@@ -41,7 +41,6 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { ScrollArea } from "./ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
@@ -489,7 +488,7 @@ export default function BeansControl({
             Manage project work tracked in `.beans/` without dropping back to the CLI.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="pt-0">
+        <DialogPanel className="flex min-h-0 flex-1 flex-col pt-0">
           {!cwd ? (
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4 text-sm text-muted-foreground">
               Beans is unavailable until this thread has an active project.
@@ -528,8 +527,8 @@ export default function BeansControl({
             </div>
           ) : (
             <div className="grid h-full min-h-0 gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-              <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-muted/12">
-                <div className="flex flex-wrap items-center gap-2 border-b border-border/70 p-3">
+              <section className="flex min-h-0 flex-col overflow-y-auto overscroll-contain rounded-2xl border border-border/70 bg-muted/12">
+                <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border/70 bg-muted/95 p-3 backdrop-blur">
                   <Input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
@@ -561,123 +560,116 @@ export default function BeansControl({
                     />
                   </Button>
                 </div>
-                <ScrollArea className="min-h-0 flex-1">
-                  <div className="space-y-2 p-3">
-                    {listQuery.isLoading ? (
-                      <div className="rounded-xl border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
-                        Loading beans...
-                      </div>
-                    ) : beans.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-border/70 bg-background/60 p-5 text-sm text-muted-foreground">
-                        No beans match this view yet. Create one to start tracking work here.
-                      </div>
-                    ) : (
-                      beans.map((bean) => {
-                        const active = bean.id === selectedBeanId && paneMode === "detail";
-                        const parentBean = bean.parent ? (beanById.get(bean.parent) ?? null) : null;
-                        const childCount = childCountByParentId.get(bean.id) ?? 0;
-                        return (
-                          <button
-                            key={bean.id}
-                            type="button"
-                            className={cn(
-                              "group w-full rounded-xl border px-4 py-3 text-left transition-colors",
-                              active
-                                ? "border-primary/40 bg-primary/6"
-                                : "border-border/70 bg-background/70 hover:border-border hover:bg-background",
-                            )}
-                            onClick={() => {
-                              setSelectedBeanId(bean.id);
-                              setPaneMode("detail");
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="truncate font-medium text-foreground">
-                                    {bean.title}
-                                  </span>
-                                  <ChevronRightIcon
-                                    className={cn(
-                                      "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                                      active && "translate-x-0.5 text-foreground",
-                                    )}
-                                  />
-                                </div>
-                                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                                  {beanSummary(bean.body)}
-                                </p>
-                                {parentBean ? (
-                                  <p className="mt-2 text-[11px] text-muted-foreground">
-                                    Child of{" "}
-                                    <span className="font-medium text-foreground/80">
-                                      {parentBean.title}
-                                    </span>
-                                  </p>
-                                ) : null}
-                              </div>
-                              <div className="flex shrink-0 flex-col items-end gap-1">
-                                <Badge
-                                  variant="outline"
-                                  className={cn("capitalize", statusTone(bean.status))}
-                                >
-                                  {bean.status}
-                                </Badge>
-                                <span className="font-mono text-[10px] text-muted-foreground">
-                                  {bean.id}
+                <div className="space-y-2 p-3">
+                  {listQuery.isLoading ? (
+                    <div className="rounded-xl border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
+                      Loading beans...
+                    </div>
+                  ) : beans.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border/70 bg-background/60 p-5 text-sm text-muted-foreground">
+                      No beans match this view yet. Create one to start tracking work here.
+                    </div>
+                  ) : (
+                    beans.map((bean) => {
+                      const active = bean.id === selectedBeanId && paneMode === "detail";
+                      const parentBean = bean.parent ? (beanById.get(bean.parent) ?? null) : null;
+                      const childCount = childCountByParentId.get(bean.id) ?? 0;
+                      return (
+                        <button
+                          key={bean.id}
+                          type="button"
+                          className={cn(
+                            "group w-full rounded-xl border px-4 py-3 text-left transition-colors",
+                            active
+                              ? "border-primary/40 bg-primary/6"
+                              : "border-border/70 bg-background/70 hover:border-border hover:bg-background",
+                          )}
+                          onClick={() => {
+                            setSelectedBeanId(bean.id);
+                            setPaneMode("detail");
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="truncate font-medium text-foreground">
+                                  {bean.title}
                                 </span>
+                                <ChevronRightIcon
+                                  className={cn(
+                                    "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                                    active && "translate-x-0.5 text-foreground",
+                                  )}
+                                />
                               </div>
+                              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                {beanSummary(bean.body)}
+                              </p>
+                              {parentBean ? (
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Child of{" "}
+                                  <span className="font-medium text-foreground/80">
+                                    {parentBean.title}
+                                  </span>
+                                </p>
+                              ) : null}
                             </div>
-                            <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                              <Badge variant="outline" className="capitalize">
-                                {bean.type}
+                            <div className="flex shrink-0 flex-col items-end gap-1">
+                              <Badge
+                                variant="outline"
+                                className={cn("capitalize", statusTone(bean.status))}
+                              >
+                                {bean.status}
                               </Badge>
-                              {bean.priority ? (
-                                <Badge
-                                  variant="outline"
-                                  className="capitalize text-muted-foreground"
-                                >
-                                  {bean.priority}
-                                </Badge>
-                              ) : null}
-                              {childCount > 0 ? (
-                                <Badge variant="outline" className="text-muted-foreground">
-                                  {childCount} {childCount === 1 ? "child" : "children"}
-                                </Badge>
-                              ) : null}
+                              <span className="font-mono text-[10px] text-muted-foreground">
+                                {bean.id}
+                              </span>
                             </div>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                </ScrollArea>
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                            <Badge variant="outline" className="capitalize">
+                              {bean.type}
+                            </Badge>
+                            {bean.priority ? (
+                              <Badge variant="outline" className="capitalize text-muted-foreground">
+                                {bean.priority}
+                              </Badge>
+                            ) : null}
+                            {childCount > 0 ? (
+                              <Badge variant="outline" className="text-muted-foreground">
+                                {childCount} {childCount === 1 ? "child" : "children"}
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
               </section>
 
-              <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/80">
+              <section className="flex min-h-0 flex-col overflow-y-auto overscroll-contain rounded-2xl border border-border/70 bg-background/80">
                 {paneMode === "roadmap" ? (
                   <>
-                    <div className="border-b border-border/70 px-4 py-3">
+                    <div className="sticky top-0 z-10 border-b border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
                       <h3 className="font-medium text-foreground">Roadmap</h3>
                       <p className="mt-1 text-xs text-muted-foreground">
                         Live output from `beans roadmap` for the current project.
                       </p>
                     </div>
-                    <ScrollArea className="min-h-0 flex-1">
-                      <div className="p-4">
-                        {roadmapQuery.isLoading ? (
-                          <div className="text-sm text-muted-foreground">Building roadmap...</div>
-                        ) : (
-                          <pre className="whitespace-pre-wrap rounded-xl border border-border/70 bg-muted/18 p-4 font-mono text-xs leading-6 text-foreground">
-                            {roadmapQuery.data?.markdown.trim() || "No roadmap output yet."}
-                          </pre>
-                        )}
-                      </div>
-                    </ScrollArea>
+                    <div className="p-4">
+                      {roadmapQuery.isLoading ? (
+                        <div className="text-sm text-muted-foreground">Building roadmap...</div>
+                      ) : (
+                        <pre className="whitespace-pre-wrap rounded-xl border border-border/70 bg-muted/18 p-4 font-mono text-xs leading-6 text-foreground">
+                          {roadmapQuery.data?.markdown.trim() || "No roadmap output yet."}
+                        </pre>
+                      )}
+                    </div>
                   </>
                 ) : paneMode === "create" ? (
                   <>
-                    <div className="border-b border-border/70 px-4 py-3">
+                    <div className="sticky top-0 z-10 border-b border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
                       <h3 className="font-medium text-foreground">
                         {createParentBean ? "Create child bean" : "Create bean"}
                       </h3>
@@ -687,81 +679,77 @@ export default function BeansControl({
                           : "This writes a new Markdown-backed Bean into `.beans/`."}
                       </p>
                     </div>
-                    <ScrollArea className="min-h-0 flex-1">
-                      <div className="space-y-4 p-4">
-                        {createParentBean ? (
-                          <div className="rounded-xl border border-border/70 bg-muted/18 px-3 py-3">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                                  Creating under parent {createParentBean.type}
-                                </div>
-                                <div className="mt-1 truncate text-sm font-medium text-foreground">
-                                  {createParentBean.title}
-                                </div>
-                                <div className="font-mono text-[10px] text-muted-foreground">
-                                  {createParentBean.id}
-                                </div>
+                    <div className="space-y-4 p-4">
+                      {createParentBean ? (
+                        <div className="rounded-xl border border-border/70 bg-muted/18 px-3 py-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                                Creating under parent {createParentBean.type}
                               </div>
-                              <Badge variant="outline" className="capitalize">
-                                {createParentBean.type}
-                              </Badge>
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                onClick={() => setCreateParentBeanId(null)}
-                              >
-                                Clear parent
-                              </Button>
+                              <div className="mt-1 truncate text-sm font-medium text-foreground">
+                                {createParentBean.title}
+                              </div>
+                              <div className="font-mono text-[10px] text-muted-foreground">
+                                {createParentBean.id}
+                              </div>
                             </div>
+                            <Badge variant="outline" className="capitalize">
+                              {createParentBean.type}
+                            </Badge>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => setCreateParentBeanId(null)}
+                            >
+                              Clear parent
+                            </Button>
                           </div>
-                        ) : null}
-                        <BeanField
-                          label="Title"
-                          value={createForm.title}
-                          onChange={handleCreateFieldChange("title")}
-                          placeholder="Short summary"
-                        />
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <BeanSelectField
-                            label="Status"
-                            value={createForm.status}
-                            onChange={handleCreateFieldChange("status")}
-                            options={STATUS_OPTIONS}
-                          />
-                          <BeanSelectField
-                            label="Type"
-                            value={createForm.type}
-                            onChange={handleCreateFieldChange("type")}
-                            options={TYPE_OPTIONS}
-                          />
-                          <BeanSelectField
-                            label="Priority"
-                            value={createForm.priority}
-                            onChange={handleCreateFieldChange("priority")}
-                            options={PRIORITY_OPTIONS}
-                            emptyLabel="No priority"
-                          />
                         </div>
-                        <label className="flex min-w-0 flex-col gap-1.5">
-                          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                            Description
-                          </span>
-                          <Textarea
-                            value={createForm.body}
-                            onChange={(event) =>
-                              handleCreateFieldChange("body")(event.target.value)
-                            }
-                            rows={10}
-                            placeholder="Describe the work, acceptance criteria, or notes."
-                          />
-                        </label>
+                      ) : null}
+                      <BeanField
+                        label="Title"
+                        value={createForm.title}
+                        onChange={handleCreateFieldChange("title")}
+                        placeholder="Short summary"
+                      />
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <BeanSelectField
+                          label="Status"
+                          value={createForm.status}
+                          onChange={handleCreateFieldChange("status")}
+                          options={STATUS_OPTIONS}
+                        />
+                        <BeanSelectField
+                          label="Type"
+                          value={createForm.type}
+                          onChange={handleCreateFieldChange("type")}
+                          options={TYPE_OPTIONS}
+                        />
+                        <BeanSelectField
+                          label="Priority"
+                          value={createForm.priority}
+                          onChange={handleCreateFieldChange("priority")}
+                          options={PRIORITY_OPTIONS}
+                          emptyLabel="No priority"
+                        />
                       </div>
-                    </ScrollArea>
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                          Description
+                        </span>
+                        <Textarea
+                          value={createForm.body}
+                          onChange={(event) => handleCreateFieldChange("body")(event.target.value)}
+                          rows={10}
+                          placeholder="Describe the work, acceptance criteria, or notes."
+                        />
+                      </label>
+                    </div>
                   </>
                 ) : selectedBean ? (
                   <>
-                    <div className="border-b border-border/70 px-4 py-3">
+                    <div className="sticky top-0 z-10 border-b border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <h3 className="truncate font-medium text-foreground">
@@ -824,172 +812,163 @@ export default function BeansControl({
                         </div>
                       </div>
                     </div>
-                    <ScrollArea className="min-h-0 flex-1">
-                      <div className="space-y-4 p-4">
-                        <BeanField
-                          label="Title"
-                          value={editForm.title}
-                          onChange={handleEditFieldChange("title")}
+                    <div className="space-y-4 p-4">
+                      <BeanField
+                        label="Title"
+                        value={editForm.title}
+                        onChange={handleEditFieldChange("title")}
+                      />
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <BeanSelectField
+                          label="Status"
+                          value={editForm.status}
+                          onChange={handleEditFieldChange("status")}
+                          options={STATUS_OPTIONS}
                         />
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <BeanSelectField
-                            label="Status"
-                            value={editForm.status}
-                            onChange={handleEditFieldChange("status")}
-                            options={STATUS_OPTIONS}
-                          />
-                          <BeanSelectField
-                            label="Type"
-                            value={editForm.type}
-                            onChange={handleEditFieldChange("type")}
-                            options={TYPE_OPTIONS}
-                          />
-                          <BeanSelectField
-                            label="Priority"
-                            value={editForm.priority}
-                            onChange={handleEditFieldChange("priority")}
-                            options={PRIORITY_OPTIONS}
-                            emptyLabel="No priority"
-                          />
-                        </div>
-                        <label className="flex min-w-0 flex-col gap-1.5">
-                          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                            Description
-                          </span>
-                          <Textarea
-                            value={editForm.body}
-                            onChange={(event) => handleEditFieldChange("body")(event.target.value)}
-                            rows={12}
-                          />
-                        </label>
-                        {selectedBeanParent || selectedBeanChildren.length > 0 ? (
-                          <div className="rounded-xl border border-border/70 bg-muted/18 px-3 py-3">
-                            <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                              Hierarchy
-                            </div>
-                            <div className="mt-2 space-y-3">
-                              {selectedBeanParent ? (
-                                <div className="space-y-1">
-                                  <div className="text-xs text-muted-foreground">
-                                    Parent {selectedBeanParent.type}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="flex w-full items-center justify-between rounded-lg border border-border/70 bg-background px-3 py-2 text-left transition-colors hover:border-border hover:bg-background/90"
-                                    onClick={() => {
-                                      setSelectedBeanId(selectedBeanParent.id);
-                                      setPaneMode("detail");
-                                    }}
-                                  >
-                                    <div className="min-w-0">
-                                      <div className="truncate text-sm font-medium text-foreground">
-                                        {selectedBeanParent.title}
-                                      </div>
-                                      <div className="font-mono text-[10px] text-muted-foreground">
-                                        {selectedBeanParent.id}
-                                      </div>
-                                    </div>
-                                    <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                                  </button>
-                                </div>
-                              ) : null}
-                              {selectedBeanChildren.length > 0 ? (
-                                <div className="space-y-1">
-                                  <div className="text-xs text-muted-foreground">
-                                    Children ({selectedBeanChildren.length})
-                                  </div>
-                                  <div className="space-y-2">
-                                    {selectedBeanChildren.map((childBean) => (
-                                      <button
-                                        key={childBean.id}
-                                        type="button"
-                                        className="flex w-full items-center justify-between rounded-lg border border-border/70 bg-background px-3 py-2 text-left transition-colors hover:border-border hover:bg-background/90"
-                                        onClick={() => {
-                                          setSelectedBeanId(childBean.id);
-                                          setPaneMode("detail");
-                                        }}
-                                      >
-                                        <div className="min-w-0">
-                                          <div className="truncate text-sm font-medium text-foreground">
-                                            {childBean.title}
-                                          </div>
-                                          <div className="font-mono text-[10px] text-muted-foreground">
-                                            {childBean.id}
-                                          </div>
-                                        </div>
-                                        <div className="ml-3 flex shrink-0 items-center gap-2">
-                                          <Badge
-                                            variant="outline"
-                                            className={cn(
-                                              "capitalize",
-                                              statusTone(childBean.status),
-                                            )}
-                                          >
-                                            {childBean.status}
-                                          </Badge>
-                                          <ChevronRightIcon className="size-3.5 text-muted-foreground" />
-                                        </div>
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        ) : null}
+                        <BeanSelectField
+                          label="Type"
+                          value={editForm.type}
+                          onChange={handleEditFieldChange("type")}
+                          options={TYPE_OPTIONS}
+                        />
+                        <BeanSelectField
+                          label="Priority"
+                          value={editForm.priority}
+                          onChange={handleEditFieldChange("priority")}
+                          options={PRIORITY_OPTIONS}
+                          emptyLabel="No priority"
+                        />
+                      </div>
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                          Description
+                        </span>
+                        <Textarea
+                          value={editForm.body}
+                          onChange={(event) => handleEditFieldChange("body")(event.target.value)}
+                          rows={12}
+                        />
+                      </label>
+                      {selectedBeanParent || selectedBeanChildren.length > 0 ? (
                         <div className="rounded-xl border border-border/70 bg-muted/18 px-3 py-3">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="max-w-md space-y-1">
-                              <div className="text-sm font-medium text-foreground">
-                                Break this work into child beans
+                          <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                            Hierarchy
+                          </div>
+                          <div className="mt-2 space-y-3">
+                            {selectedBeanParent ? (
+                              <div className="space-y-1">
+                                <div className="text-xs text-muted-foreground">
+                                  Parent {selectedBeanParent.type}
+                                </div>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center justify-between rounded-lg border border-border/70 bg-background px-3 py-2 text-left transition-colors hover:border-border hover:bg-background/90"
+                                  onClick={() => {
+                                    setSelectedBeanId(selectedBeanParent.id);
+                                    setPaneMode("detail");
+                                  }}
+                                >
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-foreground">
+                                      {selectedBeanParent.title}
+                                    </div>
+                                    <div className="font-mono text-[10px] text-muted-foreground">
+                                      {selectedBeanParent.id}
+                                    </div>
+                                  </div>
+                                  <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                                </button>
                               </div>
-                              <p className="text-xs leading-5 text-muted-foreground">
-                                Create a new child bean from this detail view with the parent
-                                relationship already attached, so implementation tasks stay grouped
-                                under this bean.
-                              </p>
-                            </div>
-                            <Button
-                              variant="outline"
-                              disabled={isBusy}
-                              onClick={openCreateChildPane}
-                            >
-                              <GitBranchPlusIcon className="size-4" />
-                              Create Child
-                            </Button>
+                            ) : null}
+                            {selectedBeanChildren.length > 0 ? (
+                              <div className="space-y-1">
+                                <div className="text-xs text-muted-foreground">
+                                  Children ({selectedBeanChildren.length})
+                                </div>
+                                <div className="space-y-2">
+                                  {selectedBeanChildren.map((childBean) => (
+                                    <button
+                                      key={childBean.id}
+                                      type="button"
+                                      className="flex w-full items-center justify-between rounded-lg border border-border/70 bg-background px-3 py-2 text-left transition-colors hover:border-border hover:bg-background/90"
+                                      onClick={() => {
+                                        setSelectedBeanId(childBean.id);
+                                        setPaneMode("detail");
+                                      }}
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="truncate text-sm font-medium text-foreground">
+                                          {childBean.title}
+                                        </div>
+                                        <div className="font-mono text-[10px] text-muted-foreground">
+                                          {childBean.id}
+                                        </div>
+                                      </div>
+                                      <div className="ml-3 flex shrink-0 items-center gap-2">
+                                        <Badge
+                                          variant="outline"
+                                          className={cn("capitalize", statusTone(childBean.status))}
+                                        >
+                                          {childBean.status}
+                                        </Badge>
+                                        <ChevronRightIcon className="size-3.5 text-muted-foreground" />
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
                         </div>
-                        <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-3">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="max-w-md space-y-1">
-                              <div className="text-sm font-medium text-foreground">
-                                Start implementation from this bean
-                              </div>
-                              <p className="text-xs leading-5 text-muted-foreground">
-                                Opens a focused draft thread in the main chat and prefills the
-                                composer with this bean&apos;s current details and Intent so the
-                                agent can begin from a structured implementation prompt.
-                              </p>
+                      ) : null}
+                      <div className="rounded-xl border border-border/70 bg-muted/18 px-3 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="max-w-md space-y-1">
+                            <div className="text-sm font-medium text-foreground">
+                              Break this work into child beans
                             </div>
-                            <Button
-                              variant="outline"
-                              disabled={isBusy || !selectedBeanImplementationPrompt}
-                              onClick={() => void handleImplementBean()}
-                            >
-                              {isImplementing ? (
-                                <LoaderCircleIcon className="size-4 animate-spin" />
-                              ) : (
-                                <HammerIcon className="size-4" />
-                              )}
-                              Implement
-                            </Button>
+                            <p className="text-xs leading-5 text-muted-foreground">
+                              Create a new child bean from this detail view with the parent
+                              relationship already attached, so implementation tasks stay grouped
+                              under this bean.
+                            </p>
                           </div>
-                        </div>
-                        <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                          Updated {new Date(selectedBean.updated_at).toLocaleString()}
+                          <Button variant="outline" disabled={isBusy} onClick={openCreateChildPane}>
+                            <GitBranchPlusIcon className="size-4" />
+                            Create Child
+                          </Button>
                         </div>
                       </div>
-                    </ScrollArea>
+                      <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="max-w-md space-y-1">
+                            <div className="text-sm font-medium text-foreground">
+                              Start implementation from this bean
+                            </div>
+                            <p className="text-xs leading-5 text-muted-foreground">
+                              Opens a focused draft thread in the main chat and prefills the
+                              composer with this bean&apos;s current details and Intent so the agent
+                              can begin from a structured implementation prompt.
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            disabled={isBusy || !selectedBeanImplementationPrompt}
+                            onClick={() => void handleImplementBean()}
+                          >
+                            {isImplementing ? (
+                              <LoaderCircleIcon className="size-4 animate-spin" />
+                            ) : (
+                              <HammerIcon className="size-4" />
+                            )}
+                            Implement
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                        Updated {new Date(selectedBean.updated_at).toLocaleString()}
+                      </div>
+                    </div>
                   </>
                 ) : (
                   <div className="flex min-h-[22rem] items-center justify-center p-6 text-center text-sm text-muted-foreground">

@@ -155,7 +155,15 @@ describe("CliAgentAdapter Kiro chat command", () => {
     }).pipe(
       Effect.provide(
         KiroAdapterLive.pipe(
-          Layer.provideMerge(ServerSettingsService.layerTest()),
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              providers: {
+                kiro: {
+                  executionMode: "host",
+                },
+              },
+            }),
+          ),
           Layer.provideMerge(
             mockCommandSpawnerLayer((command, args) => {
               invocations.push({ command, args: [...args] });
@@ -166,6 +174,140 @@ describe("CliAgentAdapter Kiro chat command", () => {
       ),
     );
   });
+
+  it.effect("runs Kiro turns through WSL when configured", () => {
+    const invocations: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+    const wslCommand = process.platform === "win32" ? "wsl.exe" : "wsl";
+    const cwd = process.platform === "win32" ? "C:\\Users\\dgriffin3\\DGCoder" : "/repo/project";
+    const wslCwd =
+      process.platform === "win32" ? "/mnt/c/Users/dgriffin3/DGCoder" : "/repo/project";
+
+    return Effect.gen(function* () {
+      const adapter = yield* KiroAdapter;
+
+      yield* adapter.startSession({
+        threadId: ThreadId.makeUnsafe("thread-cli-agent-kiro-wsl"),
+        provider: "kiro",
+        runtimeMode: "full-access",
+        cwd,
+      });
+      yield* adapter.sendTurn({
+        threadId: ThreadId.makeUnsafe("thread-cli-agent-kiro-wsl"),
+        input: "Inspect the workspace",
+        modelSelection: {
+          provider: "kiro",
+          model: "default",
+        },
+      });
+      const events = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.timeout("2 seconds"),
+      );
+
+      assert.deepEqual(invocations, [
+        {
+          command: wslCommand,
+          args: [
+            "-d",
+            "Ubuntu",
+            "--cd",
+            wslCwd,
+            "--exec",
+            "bash",
+            "-lc",
+            'exec "$@"',
+            "bash",
+            "kiro-cli",
+            "chat",
+            "--no-interactive",
+            "--trust-all-tools",
+            "Inspect the workspace",
+          ],
+        },
+      ]);
+      assert.equal(events.at(-1)?.type, "turn.completed");
+    }).pipe(
+      Effect.provide(
+        KiroAdapterLive.pipe(
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              providers: {
+                kiro: {
+                  executionMode: "wsl",
+                  wslDistro: "Ubuntu",
+                },
+              },
+            }),
+          ),
+          Layer.provideMerge(
+            mockCommandSpawnerLayer((command, args) => {
+              invocations.push({ command, args: [...args] });
+              return { stdout: "Kiro response\n", stderr: "", code: 0 };
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect("strips terminal color codes from Kiro assistant output", () =>
+    Effect.gen(function* () {
+      const adapter = yield* KiroAdapter;
+
+      yield* adapter.startSession({
+        threadId: ThreadId.makeUnsafe("thread-cli-agent-kiro-ansi"),
+        provider: "kiro",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: ThreadId.makeUnsafe("thread-cli-agent-kiro-ansi"),
+        input: "Inspect the workspace",
+        modelSelection: {
+          provider: "kiro",
+          model: "default",
+        },
+      });
+      const events = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.timeout("2 seconds"),
+      );
+
+      assert.deepEqual(events.find((event) => event.type === "content.delta")?.payload, {
+        streamKind: "assistant_text",
+        delta: "Kiro response",
+      });
+      assert.deepEqual(events.find((event) => event.type === "item.completed")?.payload, {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "Kiro response",
+      });
+    }).pipe(
+      Effect.provide(
+        KiroAdapterLive.pipe(
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              providers: {
+                kiro: {
+                  executionMode: "host",
+                },
+              },
+            }),
+          ),
+          Layer.provideMerge(
+            mockCommandSpawnerLayer(() => ({
+              stdout: "\x1b[38;5;14m> \x1b[0mKiro response\n",
+              stderr: "",
+              code: 0,
+            })),
+          ),
+        ),
+      ),
+    ),
+  );
 });
 
 describe("CliAgentAdapter Amazon Q chat command", () => {

@@ -29,13 +29,16 @@ function mockHandle(result: { stdout: string; stderr: string; code: number }) {
 }
 
 function mockSpawnerLayer(
-  handler: (args: ReadonlyArray<string>) => { stdout: string; stderr: string; code: number },
+  handler: (
+    args: ReadonlyArray<string>,
+    command: string,
+  ) => { stdout: string; stderr: string; code: number },
 ) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { args: ReadonlyArray<string> };
-      return Effect.succeed(mockHandle(handler(cmd.args)));
+      const cmd = command as unknown as { command: string; args: ReadonlyArray<string> };
+      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command)));
     }),
   );
 }
@@ -56,6 +59,17 @@ function failingSpawnerLayer(description: string) {
   );
 }
 
+function matchesCliInvocation(
+  args: ReadonlyArray<string>,
+  binary: string,
+  expectedArgs: ReadonlyArray<string>,
+): boolean {
+  const joined = args.join(" ");
+  const direct = expectedArgs.join(" ");
+  const wrapped = [binary, ...expectedArgs].join(" ");
+  return joined === direct || joined.endsWith(wrapped);
+}
+
 describe("checkCliAgentProviderStatus readiness", () => {
   it.effect("returns ready when Kiro is installed and authenticated", () =>
     Effect.gen(function* () {
@@ -74,16 +88,82 @@ describe("checkCliAgentProviderStatus readiness", () => {
         Layer.mergeAll(
           ServerSettingsService.layerTest(),
           mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
-            if (joined === "whoami --format json")
+            if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
+              return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
+            if (matchesCliInvocation(args, "kiro-cli", ["whoami", "--format", "json"]))
               return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
           }),
         ),
       ),
     ),
   );
+
+  it.effect("runs Kiro status probes through WSL when configured", () => {
+    const invocations: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+    const wslCommand = process.platform === "win32" ? "wsl.exe" : "wsl";
+
+    return Effect.gen(function* () {
+      const status = yield* checkCliAgentProviderStatus(KIRO_PROVIDER_CONFIG);
+
+      assert.strictEqual(status.provider, "kiro");
+      assert.strictEqual(status.status, "ready");
+      assert.deepStrictEqual(invocations, [
+        {
+          command: wslCommand,
+          args: [
+            "-d",
+            "Ubuntu",
+            "--exec",
+            "bash",
+            "-lc",
+            'exec "$@"',
+            "bash",
+            "kiro-cli",
+            "--version",
+          ],
+        },
+        {
+          command: wslCommand,
+          args: [
+            "-d",
+            "Ubuntu",
+            "--exec",
+            "bash",
+            "-lc",
+            'exec "$@"',
+            "bash",
+            "kiro-cli",
+            "whoami",
+            "--format",
+            "json",
+          ],
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ServerSettingsService.layerTest({
+            providers: {
+              kiro: {
+                executionMode: "wsl",
+                wslDistro: "Ubuntu",
+              },
+            },
+          }),
+          mockSpawnerLayer((args, command) => {
+            invocations.push({ command, args: [...args] });
+            const joined = args.join(" ");
+            if (joined === '-d Ubuntu --exec bash -lc exec "$@" bash kiro-cli --version')
+              return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
+            if (joined === '-d Ubuntu --exec bash -lc exec "$@" bash kiro-cli whoami --format json')
+              return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+  });
 
   it.effect("returns ready when Amazon Q is installed and authenticated", () =>
     Effect.gen(function* () {
@@ -113,6 +193,36 @@ describe("checkCliAgentProviderStatus readiness", () => {
       ),
     ),
   );
+
+  it.effect("recognizes Amazon Q IAM Identity Center whoami JSON as authenticated", () =>
+    Effect.gen(function* () {
+      const status = yield* checkCliAgentProviderStatus(AMAZON_Q_PROVIDER_CONFIG);
+      assert.strictEqual(status.provider, "amazonQ");
+      assert.strictEqual(status.status, "ready");
+      assert.strictEqual(status.auth.status, "authenticated");
+      assert.strictEqual(status.auth.type, "iam-identity-center");
+      assert.strictEqual(status.auth.label, "IAM Identity Center");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ServerSettingsService.layerTest(),
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version")
+              return { stdout: "amazon-q-cli 2.3.4\n", stderr: "", code: 0 };
+            if (joined === "whoami --format json")
+              return {
+                stdout:
+                  '{"accountType":"IamIdentityCenter","startUrl":"https://example.awsapps.com/start","region":"us-east-1"}\n',
+                stderr: "",
+                code: 0,
+              };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    ),
+  );
 });
 
 describe("checkCliAgentProviderStatus failure states", () => {
@@ -128,9 +238,9 @@ describe("checkCliAgentProviderStatus failure states", () => {
         Layer.mergeAll(
           ServerSettingsService.layerTest(),
           mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "", stderr: "spawn ENOENT", code: 1 };
-            throw new Error(`Unexpected args: ${joined}`);
+            if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
+              return { stdout: "", stderr: "spawn ENOENT", code: 1 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
           }),
         ),
       ),
@@ -146,18 +256,18 @@ describe("checkCliAgentProviderStatus failure states", () => {
       assert.strictEqual(status.auth.status, "unauthenticated");
       assert.strictEqual(
         status.message,
-        "Kiro is not authenticated. Run `kiro-cli login` and try again.",
+        'Kiro is not authenticated. Run `wsl.exe --exec bash -lc "exec \\"$@\\"" bash kiro-cli login` and try again.',
       );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
           ServerSettingsService.layerTest(),
           mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
-            if (joined === "whoami --format json")
+            if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
+              return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
+            if (matchesCliInvocation(args, "kiro-cli", ["whoami", "--format", "json"]))
               return { stdout: '{"authenticated":false}\n', stderr: "", code: 1 };
-            throw new Error(`Unexpected args: ${joined}`);
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
           }),
         ),
       ),
@@ -178,5 +288,43 @@ describe("checkCliAgentProviderStatus failure states", () => {
       assert.strictEqual(status.installed, false);
       assert.strictEqual(status.message, "Amazon Q is disabled in T3 Code settings.");
     }),
+  );
+
+  it.effect(
+    "uses configured Amazon Q IAM Identity Center details in unauthenticated guidance",
+    () =>
+      Effect.gen(function* () {
+        const serverSettingsLayer = ServerSettingsService.layerTest({
+          providers: {
+            amazonQ: {
+              identityProviderUrl: "https://example.awsapps.com/start",
+              identityCenterRegion: "us-east-1",
+            },
+          },
+        });
+        const status = yield* checkCliAgentProviderStatus(AMAZON_Q_PROVIDER_CONFIG).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              serverSettingsLayer,
+              mockSpawnerLayer((args) => {
+                const joined = args.join(" ");
+                if (joined === "--version")
+                  return { stdout: "amazon-q-cli 2.3.4\n", stderr: "", code: 0 };
+                if (joined === "whoami --format json")
+                  return { stdout: '{"account":null}\n', stderr: "", code: 1 };
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          ),
+        );
+
+        assert.strictEqual(status.provider, "amazonQ");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.auth.status, "unauthenticated");
+        assert.strictEqual(
+          status.message,
+          "Amazon Q is not authenticated. Run `q login --license pro --identity-provider https://example.awsapps.com/start --region us-east-1` and try again.",
+        );
+      }),
   );
 });

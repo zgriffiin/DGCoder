@@ -144,4 +144,94 @@ describe("GeneralSettingsPanel observability", () => {
       }),
     );
   });
+
+  it("persists Amazon Q IAM Identity Center SSO settings", async () => {
+    const updateSettings = vi
+      .fn<LocalApi["server"]["updateSettings"]>()
+      .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
+    window.nativeApi = {
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Toggle Amazon Q details" }).click();
+    await page.getByLabelText("Start URL").fill("https://example.awsapps.com/start");
+    await page.getByLabelText("Region").fill("us-east-1");
+
+    await expect
+      .element(
+        page.getByText(
+          "q login --license pro --identity-provider https://example.awsapps.com/start --region us-east-1",
+        ),
+      )
+      .toBeInTheDocument();
+
+    await vi.waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          amazonQ: {
+            ...DEFAULT_SERVER_SETTINGS.providers.amazonQ,
+            identityProviderUrl: "https://example.awsapps.com/start",
+            identityCenterRegion: "us-east-1",
+          },
+        },
+      }),
+    );
+  });
+
+  it("persists Kiro WSL execution settings", async () => {
+    const updateSettings = vi
+      .fn<LocalApi["server"]["updateSettings"]>()
+      .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
+    window.nativeApi = {
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Toggle Kiro details" }).click();
+    await expect
+      .element(page.getByText('wsl.exe --exec bash -lc "exec \\"$@\\"" bash kiro-cli login'))
+      .toBeInTheDocument();
+    await page.getByRole("switch", { name: "Run Kiro through WSL" }).click();
+    await page.getByRole("switch", { name: "Run Kiro through WSL" }).click();
+    await page.getByLabelText("WSL distro").fill("Ubuntu");
+
+    await expect
+      .element(
+        page.getByText('wsl.exe -d Ubuntu --exec bash -lc "exec \\"$@\\"" bash kiro-cli login'),
+      )
+      .toBeInTheDocument();
+
+    await vi.waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          kiro: {
+            ...DEFAULT_SERVER_SETTINGS.providers.kiro,
+            executionMode: "wsl",
+            wslDistro: "Ubuntu",
+          },
+        },
+      }),
+    );
+  });
 });

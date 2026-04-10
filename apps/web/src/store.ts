@@ -11,13 +11,14 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProjectId,
-  type ProviderKind,
+  ProviderKind,
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
+import { Schema } from "effect";
 import { create } from "zustand";
 import {
   derivePendingApprovals,
@@ -877,7 +878,7 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex" || providerName === "claudeAgent") {
+  if (Schema.is(ProviderKind)(providerName)) {
     return providerName;
   }
   return "codex";

@@ -10,6 +10,7 @@ import {
   ProjectId,
   ThreadId,
   type ModelSelection,
+  type ProviderKind,
   type ProviderModelOptions,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,10 +92,10 @@ function resetComposerDraftStore() {
 }
 
 function modelSelection(
-  provider: "codex" | "claudeAgent",
+  provider: ProviderKind,
   model: string,
   options?: ModelSelection["options"],
-): ModelSelection {
+) {
   return {
     provider,
     model,
@@ -837,6 +838,19 @@ describe("composerDraftStore modelSelection", () => {
     );
   });
 
+  it("stores Kiro as an active draft model selection", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setModelSelection(threadRef, modelSelection("kiro", "default"));
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      modelSelectionByProvider: {
+        kiro: modelSelection("kiro", "default"),
+      },
+      activeProvider: "kiro",
+    });
+  });
+
   it("replaces only the targeted provider options on the current model selection", () => {
     const store = useComposerDraftStore.getState();
 
@@ -1100,6 +1114,22 @@ describe("composerDraftStore sticky composer settings", () => {
         claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6"),
       },
       activeProvider: "claudeAgent",
+    });
+  });
+
+  it("applies sticky Kiro selection to new drafts", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.makeUnsafe("thread-sticky-kiro-provider");
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+    store.setStickyModelSelection(modelSelection("kiro", "default"));
+    store.applyStickyState(threadRef);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      modelSelectionByProvider: {
+        kiro: modelSelection("kiro", "default"),
+      },
+      activeProvider: "kiro",
     });
   });
 });

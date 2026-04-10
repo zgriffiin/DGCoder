@@ -11,11 +11,15 @@ describe("ServerSettings providers", () => {
     expect(DEFAULT_SERVER_SETTINGS.providers.kiro).toEqual({
       enabled: true,
       binaryPath: "kiro-cli",
+      executionMode: "auto",
+      wslDistro: "",
       customModels: [],
     });
     expect(DEFAULT_SERVER_SETTINGS.providers.amazonQ).toEqual({
       enabled: true,
       binaryPath: "q",
+      identityProviderUrl: "",
+      identityCenterRegion: "",
       customModels: [],
     });
   });
@@ -26,11 +30,15 @@ describe("ServerSettings providers", () => {
         providers: {
           kiro: {
             binaryPath: "C:/tools/kiro-cli.exe",
+            executionMode: "wsl",
+            wslDistro: "Ubuntu",
             customModels: ["kiro-model"],
           },
           amazonQ: {
             enabled: false,
             binaryPath: "C:/tools/q.exe",
+            identityProviderUrl: "https://example.awsapps.com/start",
+            identityCenterRegion: "us-east-1",
           },
         },
       }),
@@ -38,11 +46,15 @@ describe("ServerSettings providers", () => {
       providers: {
         kiro: {
           binaryPath: "C:/tools/kiro-cli.exe",
+          executionMode: "wsl",
+          wslDistro: "Ubuntu",
           customModels: ["kiro-model"],
         },
         amazonQ: {
           enabled: false,
           binaryPath: "C:/tools/q.exe",
+          identityProviderUrl: "https://example.awsapps.com/start",
+          identityCenterRegion: "us-east-1",
         },
       },
     });

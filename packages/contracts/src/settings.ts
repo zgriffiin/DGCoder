@@ -44,6 +44,9 @@ export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientS
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvMode = typeof ThreadEnvMode.Type;
 
+export const CliAgentExecutionMode = Schema.Literals(["auto", "host", "wsl"]);
+export type CliAgentExecutionMode = typeof CliAgentExecutionMode.Type;
+
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
     Schema.decodeTo(
@@ -74,6 +77,10 @@ export type ClaudeSettings = typeof ClaudeSettings.Type;
 export const KiroSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   binaryPath: makeBinaryPathSetting("kiro-cli"),
+  executionMode: CliAgentExecutionMode.pipe(
+    Schema.withDecodingDefault(() => "auto" as const satisfies CliAgentExecutionMode),
+  ),
+  wslDistro: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type KiroSettings = typeof KiroSettings.Type;
@@ -81,6 +88,8 @@ export type KiroSettings = typeof KiroSettings.Type;
 export const AmazonQSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   binaryPath: makeBinaryPathSetting("q"),
+  identityProviderUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  identityCenterRegion: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type AmazonQSettings = typeof AmazonQSettings.Type;
@@ -206,12 +215,16 @@ const ClaudeSettingsPatch = Schema.Struct({
 const KiroSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(Schema.String),
+  executionMode: Schema.optionalKey(CliAgentExecutionMode),
+  wslDistro: Schema.optionalKey(Schema.String),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 const AmazonQSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(Schema.String),
+  identityProviderUrl: Schema.optionalKey(Schema.String),
+  identityCenterRegion: Schema.optionalKey(Schema.String),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
