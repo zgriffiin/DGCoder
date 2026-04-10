@@ -29,6 +29,7 @@ Recent work in this fork includes:
 - Kiro and Amazon Q CLI-agent adapters.
 - Provider status/settings for Codex, Claude, Kiro, and Amazon Q.
 - Orchestration event recovery fixes for session restart and reconnect flows.
+- Session completion and diff rendering fixes for smoother long-running threads.
 - Compact work-log rendering with a detail popup for long tool/output entries.
 - Beans workflow management from the UI.
 - A post-agent quality gate that records format, lint, typecheck, and code-shape failures.
@@ -106,6 +107,25 @@ revert actions.
 
 Work-log rows are compact by default. Long tool details can be opened in a full detail
 dialog without expanding the entire timeline.
+
+### Performance And Session Reliability
+
+This fork has focused on keeping the UI responsive and predictable while provider
+sessions run, reconnect, or recover from partial streams. Recent fixes include:
+
+- Provider session updates now reconcile the latest turn when a runtime settles, so a
+  completed provider session does not keep rendering as still working after refresh or
+  restart.
+- Settled provider states clear stale active-turn ids, while duplicate turn starts are
+  still rejected when the session is actually running.
+- The chat composer ignores extra send attempts while a turn is running, which prevents
+  accidental duplicate submissions from keyboard input during active work.
+- The diff panel defaults to the latest turn instead of the whole conversation. Full
+  conversation diffs are still available, but only through an explicit scope.
+- Diff rendering is unmounted when the diff panel closes, and the diff worker pool/cache
+  are capped to reduce UI-thread and memory pressure during large patches.
+- Long provider work-log entries stay compact until opened in a detail dialog, avoiding
+  oversized timeline rows during heavy tool output.
 
 ### Beans
 
