@@ -3042,6 +3042,9 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
+    if (phase === "running") {
+      return;
+    }
     const promptForSend = promptRef.current;
     const {
       trimmedPrompt: trimmed,

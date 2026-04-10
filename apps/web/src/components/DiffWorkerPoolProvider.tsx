@@ -34,7 +34,7 @@ export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
   const workerPoolSize = useMemo(() => {
     const cores =
       typeof navigator === "undefined" ? 4 : Math.max(1, navigator.hardwareConcurrency || 4);
-    return Math.max(2, Math.min(6, Math.floor(cores / 2)));
+    return Math.max(1, Math.min(2, Math.floor(cores / 4)));
   }, []);
 
   return (
@@ -42,7 +42,7 @@ export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
       poolOptions={{
         workerFactory: () => new DiffsWorker(),
         poolSize: workerPoolSize,
-        totalASTLRUCacheSize: 240,
+        totalASTLRUCacheSize: 80,
       }}
       highlighterOptions={{
         theme: diffThemeName,

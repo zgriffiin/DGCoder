@@ -1,5 +1,5 @@
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
-import { Suspense, lazy, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, type ReactNode, useCallback, useEffect, useMemo } from "react";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
@@ -193,7 +193,6 @@ function ChatThreadRouteView() {
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
   const diffOpen = search.diff === "1";
   const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
-  const [hasOpenedDiff, setHasOpenedDiff] = useState(diffOpen);
   const closeDiff = useCallback(() => {
     if (!threadRef) {
       return;
@@ -219,12 +218,6 @@ function ChatThreadRouteView() {
   }, [navigate, threadRef]);
 
   useEffect(() => {
-    if (diffOpen) {
-      setHasOpenedDiff(true);
-    }
-  }, [diffOpen]);
-
-  useEffect(() => {
     if (!threadRef || !bootstrapComplete) {
       return;
     }
@@ -245,8 +238,6 @@ function ChatThreadRouteView() {
     return null;
   }
 
-  const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
-
   if (!shouldUseDiffSheet) {
     return (
       <>
@@ -261,7 +252,7 @@ function ChatThreadRouteView() {
           diffOpen={diffOpen}
           onCloseDiff={closeDiff}
           onOpenDiff={openDiff}
-          renderDiffContent={shouldRenderDiffContent}
+          renderDiffContent={diffOpen}
         />
       </>
     );
@@ -277,7 +268,7 @@ function ChatThreadRouteView() {
         />
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
-        {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
+        {diffOpen ? <LazyDiffPanel mode="sheet" /> : null}
       </DiffPanelSheet>
     </>
   );

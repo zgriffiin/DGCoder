@@ -151,6 +151,22 @@ function orchestrationSessionStatusFromRuntimeState(
   }
 }
 
+function shouldKeepActiveTurnForSessionState(
+  state: "starting" | "running" | "waiting" | "ready" | "interrupted" | "stopped" | "error",
+): boolean {
+  switch (state) {
+    case "starting":
+    case "running":
+    case "waiting":
+      return true;
+    case "ready":
+    case "interrupted":
+    case "stopped":
+    case "error":
+      return false;
+  }
+}
+
 function requestKindFromCanonicalRequestType(
   requestType: string | undefined,
 ): "command" | "file-read" | "file-change" | undefined {
@@ -1076,11 +1092,14 @@ const make = Effect.fn("make")(function* () {
       const nextActiveTurnId =
         event.type === "turn.started"
           ? (eventTurnId ?? null)
-          : event.type === "turn.completed" ||
-              event.type === "turn.aborted" ||
-              event.type === "session.exited"
+          : event.type === "session.state.changed" &&
+              !shouldKeepActiveTurnForSessionState(event.payload.state)
             ? null
-            : activeTurnId;
+            : event.type === "turn.completed" ||
+                event.type === "turn.aborted" ||
+                event.type === "session.exited"
+              ? null
+              : activeTurnId;
       const status = (() => {
         switch (event.type) {
           case "session.state.changed":
@@ -1327,7 +1346,7 @@ const make = Effect.fn("make")(function* () {
             status: "error",
             providerName: event.provider,
             runtimeMode: thread.session?.runtimeMode ?? "full-access",
-            activeTurnId: eventTurnId ?? null,
+            activeTurnId: null,
             lastError: runtimeErrorMessage,
             updatedAt: now,
           },
