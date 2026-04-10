@@ -37,6 +37,77 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   return "completed" as const;
 }
 
+function latestTurnStateFromSettledSessionStatus(
+  status: OrchestrationSession["status"],
+): NonNullable<OrchestrationThread["latestTurn"]>["state"] | null {
+  switch (status) {
+    case "ready":
+    case "idle":
+      return "completed";
+    case "interrupted":
+    case "stopped":
+      return "interrupted";
+    case "error":
+      return "error";
+    case "starting":
+    case "running":
+      return null;
+  }
+}
+
+function normalizeSessionForProjection(session: OrchestrationSession): OrchestrationSession {
+  if (session.status === "running" || session.activeTurnId === null) {
+    return session;
+  }
+  return {
+    ...session,
+    activeTurnId: null,
+  };
+}
+
+function reconcileLatestTurnForSessionSet(
+  thread: OrchestrationThread,
+  session: OrchestrationSession,
+): OrchestrationThread["latestTurn"] {
+  if (session.status === "running" && session.activeTurnId !== null) {
+    return {
+      turnId: session.activeTurnId,
+      state: "running",
+      requestedAt:
+        thread.latestTurn?.turnId === session.activeTurnId
+          ? thread.latestTurn.requestedAt
+          : session.updatedAt,
+      startedAt:
+        thread.latestTurn?.turnId === session.activeTurnId
+          ? (thread.latestTurn.startedAt ?? session.updatedAt)
+          : session.updatedAt,
+      completedAt: null,
+      assistantMessageId:
+        thread.latestTurn?.turnId === session.activeTurnId
+          ? thread.latestTurn.assistantMessageId
+          : null,
+    };
+  }
+
+  const latestTurn = thread.latestTurn;
+  const settledState = latestTurnStateFromSettledSessionStatus(session.status);
+  if (
+    latestTurn === null ||
+    settledState === null ||
+    latestTurn.completedAt !== null ||
+    (session.activeTurnId !== null && session.activeTurnId !== latestTurn.turnId)
+  ) {
+    return latestTurn;
+  }
+
+  return {
+    ...latestTurn,
+    state: latestTurn.state === "error" ? "error" : settledState,
+    startedAt: latestTurn.startedAt ?? session.updatedAt,
+    completedAt: session.updatedAt,
+  };
+}
+
 function updateThread(
   threads: ReadonlyArray<OrchestrationThread>,
   threadId: ThreadId,
@@ -431,37 +502,19 @@ export function projectEvent(
           return nextBase;
         }
 
-        const session: OrchestrationSession = yield* decodeForEvent(
+        const decodedSession: OrchestrationSession = yield* decodeForEvent(
           OrchestrationSession,
           payload.session,
           event.type,
           "session",
         );
+        const session = normalizeSessionForProjection(decodedSession);
 
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
-            latestTurn:
-              session.status === "running" && session.activeTurnId !== null
-                ? {
-                    turnId: session.activeTurnId,
-                    state: "running",
-                    requestedAt:
-                      thread.latestTurn?.turnId === session.activeTurnId
-                        ? thread.latestTurn.requestedAt
-                        : session.updatedAt,
-                    startedAt:
-                      thread.latestTurn?.turnId === session.activeTurnId
-                        ? (thread.latestTurn.startedAt ?? session.updatedAt)
-                        : session.updatedAt,
-                    completedAt: null,
-                    assistantMessageId:
-                      thread.latestTurn?.turnId === session.activeTurnId
-                        ? thread.latestTurn.assistantMessageId
-                        : null,
-                  }
-                : thread.latestTurn,
+            latestTurn: reconcileLatestTurnForSessionSet(thread, decodedSession),
             updatedAt: event.occurredAt,
           }),
         };

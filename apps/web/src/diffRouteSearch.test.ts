@@ -60,6 +60,20 @@ describe("parseDiffRouteSearch", () => {
     });
   });
 
+  it("supports explicit whole-conversation diff scope", () => {
+    const parsed = parseDiffRouteSearch({
+      diff: "1",
+      diffScope: "conversation",
+      diffTurnId: "turn-1",
+      diffFilePath: "src/app.ts",
+    });
+
+    expect(parsed).toEqual({
+      diff: "1",
+      diffScope: "conversation",
+    });
+  });
+
   it("normalizes whitespace-only values", () => {
     const parsed = parseDiffRouteSearch({
       diff: "1",
