@@ -10,8 +10,9 @@ import {
   AntigravityIcon,
   CursorIcon,
   Icon,
-  TraeIcon,
   IntelliJIdeaIcon,
+  KiroIcon,
+  TraeIcon,
   VisualStudioCode,
   VisualStudioCodeInsiders,
   VSCodium,
@@ -31,6 +32,11 @@ const resolveOptions = (platform: string, availableEditors: ReadonlyArray<Editor
       label: "Trae",
       Icon: TraeIcon,
       value: "trae",
+    },
+    {
+      label: "Kiro",
+      Icon: KiroIcon,
+      value: "kiro",
     },
     {
       label: "VS Code",
