@@ -1,0 +1,204 @@
+name: CodeRabbit CLI Review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    name: Review PR with CodeRabbit CLI
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: coderabbit-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      CODERABBIT_API_KEY: ${{ secrets.CODERABBIT_API_KEY }}
+      CODERABBIT_REVIEW_FILE: ${{ runner.temp }}/coderabbit-review.txt
+    steps:
+      - id: guard
+        name: Check review prerequisites
+        shell: bash
+        run: |
+          if [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "reason=fork_pull_request" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ -z "${CODERABBIT_API_KEY}" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "reason=missing_api_key" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "reason=ok" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        if: steps.guard.outputs.should_run == 'true'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install CodeRabbit CLI
+        if: steps.guard.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/coderabbit/bin"
+          mkdir -p "${install_dir}"
+          curl -fsSL https://cli.coderabbit.ai/install.sh | env CODERABBIT_INSTALL_DIR="${install_dir}" sh
+          echo "${install_dir}" >> "$GITHUB_PATH"
+          "${install_dir}/coderabbit" -V
+
+      - id: review
+        name: Run CodeRabbit review
+        if: steps.guard.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set +e
+          base_branch="${{ github.event.pull_request.base.ref }}"
+          instructions_file="docs/coderabbit-review.md"
+
+          coderabbit auth login --api-key "${CODERABBIT_API_KEY}" > /dev/null 2>&1
+          auth_exit=$?
+          if [[ $auth_exit -ne 0 ]]; then
+            printf 'CodeRabbit auth failed with exit code %s.\n' "$auth_exit" > "${CODERABBIT_REVIEW_FILE}"
+            echo "exit_code=${auth_exit}" >> "$GITHUB_OUTPUT"
+            echo "base_branch=${base_branch}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags origin "${base_branch}" > /dev/null 2>&1
+          coderabbit review \
+            --plain \
+            --type committed \
+            --base "${base_branch}" \
+            --no-color \
+            -c "${instructions_file}" \
+            > "${CODERABBIT_REVIEW_FILE}" 2>&1
+          review_exit=$?
+
+          echo "exit_code=${review_exit}" >> "$GITHUB_OUTPUT"
+          echo "base_branch=${base_branch}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload CodeRabbit review artifact
+        if: steps.guard.outputs.should_run == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coderabbit-review
+          path: ${{ env.CODERABBIT_REVIEW_FILE }}
+          if-no-files-found: warn
+
+      - name: Write workflow summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## CodeRabbit CLI Review"
+            echo
+            if [[ "${{ steps.guard.outputs.should_run }}" != "true" ]]; then
+              echo "Skipped: \`${{ steps.guard.outputs.reason }}\`."
+              echo
+              if [[ "${{ steps.guard.outputs.reason }}" == "missing_api_key" ]]; then
+                echo "Add repository secret \`CODERABBIT_API_KEY\` to enable this workflow."
+              elif [[ "${{ steps.guard.outputs.reason }}" == "fork_pull_request" ]]; then
+                echo "Fork PRs skip this workflow because the CodeRabbit API key is not exposed to untrusted branches."
+              fi
+              exit 0
+            fi
+
+            echo "- Base branch: \`${{ steps.review.outputs.base_branch }}\`"
+            echo "- Exit code: \`${{ steps.review.outputs.exit_code }}\`"
+            echo "- Instructions: \`docs/coderabbit-review.md\`"
+            echo
+            echo "Full output is attached as workflow artifact \`coderabbit-review\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upsert PR comment
+        if: steps.guard.outputs.should_run == 'true' && always()
+        uses: actions/github-script@v8
+        env:
+          CODERABBIT_BASE_BRANCH: ${{ steps.review.outputs.base_branch }}
+          CODERABBIT_EXIT_CODE: ${{ steps.review.outputs.exit_code }}
+          CODERABBIT_REVIEW_FILE: ${{ env.CODERABBIT_REVIEW_FILE }}
+        with:
+          script: |
+            const fs = require("node:fs");
+
+            const issueNumber = context.payload.pull_request.number;
+            const marker = "<!-- coderabbit-cli-review -->";
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const filePath = process.env.CODERABBIT_REVIEW_FILE;
+            const baseBranch =
+              process.env.CODERABBIT_BASE_BRANCH ?? context.payload.pull_request.base.ref;
+            const exitCode = process.env.CODERABBIT_EXIT_CODE ?? "unknown";
+            const maxCommentChars = 30_000;
+
+            let output = "No CodeRabbit output captured.";
+            if (filePath && fs.existsSync(filePath)) {
+              output = fs.readFileSync(filePath, "utf8").trim() || output;
+            }
+
+            let truncated = false;
+            if (output.length > maxCommentChars) {
+              output = `${output.slice(0, maxCommentChars)}\n\n... [truncated, see workflow artifact for full output]`;
+              truncated = true;
+            }
+
+            output = output.replace(/```/g, "``\\u200b`");
+
+            const body = [
+              marker,
+              "## CodeRabbit CLI Review",
+              "",
+              `- Base branch: \`${baseBranch}\``,
+              `- Exit code: \`${exitCode}\``,
+              "- Instructions: `docs/coderabbit-review.md`",
+              `- Workflow run: [#${context.runNumber}](${runUrl})`,
+              truncated
+                ? "- Output truncated in this comment. Full text is attached as workflow artifact `coderabbit-review`."
+                : "",
+              "",
+              "<details><summary>Review output</summary>",
+              "",
+              "```text",
+              output,
+              "```",
+              "",
+              "</details>",
+            ]
+              .filter(Boolean)
+              .join("\n");
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });
