@@ -176,7 +176,7 @@ describe("GeneralSettingsPanel observability", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await page.getByRole("button", { name: "Caveman response style" }).click();
+    await page.getByLabelText("Caveman response style").click();
     await page.getByText("Ultra").click();
 
     await vi.waitFor(() =>
