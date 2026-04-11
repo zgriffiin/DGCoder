@@ -21,18 +21,19 @@ import { decodeOtlpTraceRecords } from "./observability/TraceRecord.ts";
 import { BrowserTraceCollector } from "./observability/Services/BrowserTraceCollector.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 
-const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const OTLP_TRACES_MAX_BODY_BYTES = 256 * 1024;
 const STATIC_HTML_CACHE_CONTROL = "no-cache";
 const STATIC_ASSET_CACHE_CONTROL = "public, max-age=3600";
 const STATIC_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
-const IMMUTABLE_STATIC_ASSET_PATTERN = /[.-][a-z0-9_-]{8,}\./i;
+const PRIVATE_SHORT_CACHE_CONTROL = "private, max-age=3600";
+const PRIVATE_IMMUTABLE_CACHE_CONTROL = "private, max-age=31536000, immutable";
+const IMMUTABLE_STATIC_ASSET_PATTERN = /[.-][a-f0-9]{8,}\./i;
 
 class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{
   readonly cause: unknown;
-  readonly bodyJson: OtlpTracer.TraceData;
+  readonly payloadSummary: string;
 }> {}
 
 class OtlpTraceRequestBodyTooLargeError extends Data.TaggedError(
@@ -114,6 +115,17 @@ function getStaticCacheControl(filePath: string, path: Path.Path): string {
     : STATIC_ASSET_CACHE_CONTROL;
 }
 
+function summarizeOtlpPayload(bodyJson: OtlpTracer.TraceData): string {
+  const preview = JSON.stringify(bodyJson).slice(0, 256);
+  const resourceSpanCount = Array.isArray(bodyJson.resourceSpans)
+    ? bodyJson.resourceSpans.length
+    : 0;
+  return JSON.stringify({
+    resourceSpanCount,
+    preview,
+  });
+}
+
 const readOtlpTraceRequestBodyJson = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const contentLengthHeader = request.headers["content-length"];
@@ -126,6 +138,10 @@ const readOtlpTraceRequestBodyJson = (request: HttpServerRequest.HttpServerReque
     }
 
     const bodyText = yield* request.text.pipe(
+      Effect.provideService(
+        HttpServerRequest.MaxBodySize,
+        FileSystem.Size(OTLP_TRACES_MAX_BODY_BYTES),
+      ),
       Effect.mapError((cause) => new ParseOtlpTraceRequestBodyError({ cause })),
     );
     if (Buffer.byteLength(bodyText, "utf8") > OTLP_TRACES_MAX_BODY_BYTES) {
@@ -175,16 +191,16 @@ export const otlpTracesProxyRouteLayer = Layer.mergeAll(
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const config = yield* ServerConfig;
-      if (!isRequestAuthorized(request, config.authToken)) {
-        return unauthorizedResponse("Unauthorized trace export request");
-      }
-
       const allowedOrigin = getAllowedOtlpCorsOrigin(request);
       if (allowedOrigin === null) {
         return HttpServerResponse.text("Forbidden origin", { status: 403 });
       }
 
       const corsHeaders = getOtlpCorsHeaders(request);
+      if (!isRequestAuthorized(request, config.authToken)) {
+        return unauthorizedResponse("Unauthorized trace export request", corsHeaders);
+      }
+
       const otlpTracesUrl = config.otlpTracesUrl;
       const browserTraceCollector = yield* BrowserTraceCollector;
       const httpClient = yield* HttpClient.HttpClient;
@@ -212,13 +228,17 @@ export const otlpTracesProxyRouteLayer = Layer.mergeAll(
 
       yield* Effect.try({
         try: () => decodeOtlpTraceRecords(bodyJson),
-        catch: (cause) => new DecodeOtlpTraceRecordsError({ cause, bodyJson }),
+        catch: (cause) =>
+          new DecodeOtlpTraceRecordsError({
+            cause,
+            payloadSummary: summarizeOtlpPayload(bodyJson),
+          }),
       }).pipe(
         Effect.flatMap((records) => browserTraceCollector.record(records)),
         Effect.catch((cause) =>
           Effect.logWarning("Failed to decode browser OTLP traces", {
             cause,
-            bodyJson,
+            payloadSummary: cause.payloadSummary,
           }),
         ),
       );
@@ -310,7 +330,7 @@ export const attachmentsRouteLayer = HttpRouter.add(
     return yield* HttpServerResponse.file(filePath, {
       status: 200,
       headers: {
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": PRIVATE_IMMUTABLE_CACHE_CONTROL,
       },
     }).pipe(
       Effect.catch(() =>
@@ -347,7 +367,7 @@ export const projectFaviconRouteLayer = HttpRouter.add(
         status: 200,
         contentType: "image/svg+xml",
         headers: {
-          "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
+          "Cache-Control": PRIVATE_SHORT_CACHE_CONTROL,
         },
       });
     }
@@ -355,7 +375,7 @@ export const projectFaviconRouteLayer = HttpRouter.add(
     return yield* HttpServerResponse.file(faviconFilePath, {
       status: 200,
       headers: {
-        "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
+        "Cache-Control": PRIVATE_SHORT_CACHE_CONTROL,
       },
     }).pipe(
       Effect.catch(() =>

@@ -39,10 +39,11 @@ export function isRequestAuthorized(
   return readBearerToken(request) === authToken || readQueryToken(request) === authToken;
 }
 
-export function unauthorizedResponse(message: string) {
+export function unauthorizedResponse(message: string, headers?: Record<string, string>) {
   return HttpServerResponse.text(message, {
     status: 401,
     headers: {
+      ...headers,
       "WWW-Authenticate": "Bearer",
     },
   });

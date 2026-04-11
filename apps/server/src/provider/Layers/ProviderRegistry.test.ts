@@ -530,7 +530,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
                   }
                   return { stdout: "", stderr: "spawn ENOENT", code: 1 };
                 }
-                if (joined === '--exec bash -lc exec "$@" bash kiro-cli --version') {
+                if (args.includes("kiro-cli") && args.includes("--version")) {
                   return { stdout: "", stderr: "spawn ENOENT", code: 1 };
                 }
                 if (joined === "login status") {

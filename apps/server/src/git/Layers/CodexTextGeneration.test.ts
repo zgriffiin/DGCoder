@@ -44,6 +44,8 @@ function makeFakeCodexBinary(
     const binDir = path.join(dir, "bin");
     const codexScriptPath = path.join(binDir, "codex.mjs");
     const codexPath = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    const escapedExecPathForDoubleQuotes = process.execPath.replaceAll('"', '""');
+    const escapedExecPathForSingleQuotes = process.execPath.replaceAll("'", "'\"'\"'");
     yield* fs.makeDirectory(binDir, { recursive: true });
 
     yield* fs.writeFileString(
@@ -123,8 +125,8 @@ function makeFakeCodexBinary(
     yield* fs.writeFileString(
       codexPath,
       process.platform === "win32"
-        ? ["@echo off", 'node "%~dp0codex.mjs" %*', ""].join("\r\n")
-        : ["#!/bin/sh", 'exec node "$0.mjs" "$@"', ""].join("\n"),
+        ? ["@echo off", `"${escapedExecPathForDoubleQuotes}" "%~dp0codex.mjs" %*`, ""].join("\r\n")
+        : ["#!/bin/sh", `exec '${escapedExecPathForSingleQuotes}' "$0.mjs" "$@"`, ""].join("\n"),
     );
     yield* fs.chmod(codexScriptPath, 0o755);
     yield* fs.chmod(codexPath, 0o755);

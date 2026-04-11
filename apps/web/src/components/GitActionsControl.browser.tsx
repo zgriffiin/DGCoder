@@ -116,6 +116,11 @@ vi.mock("~/lib/gitStatusState", () => ({
 }));
 
 vi.mock("~/localApi", () => ({
+  ensureLocalApi: vi.fn(() => ({
+    server: {
+      updateSettings: vi.fn(),
+    },
+  })),
   readLocalApi: vi.fn(() => null),
 }));
 
