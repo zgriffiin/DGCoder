@@ -44,6 +44,7 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { applyResponseStyleToTurnInput } from "../responseStyle.ts";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
@@ -402,6 +403,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     let metricProvider = "unknown";
     let metricModel = input.modelSelection?.model;
     return yield* Effect.gen(function* () {
+      const responseStyle = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.responseStyle),
+      );
       const routed = yield* resolveRoutableSession({
         threadId: input.threadId,
         operation: "ProviderService.sendTurn",
@@ -413,7 +417,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
       });
-      const turn = yield* routed.adapter.sendTurn(input);
+      const turn = yield* routed.adapter.sendTurn({
+        ...input,
+        input: applyResponseStyleToTurnInput(input.input, responseStyle),
+      });
       yield* directory.upsert({
         threadId: input.threadId,
         provider: routed.adapter.provider,

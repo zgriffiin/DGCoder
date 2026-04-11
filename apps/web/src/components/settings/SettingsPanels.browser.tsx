@@ -158,6 +158,34 @@ describe("GeneralSettingsPanel observability", () => {
     );
   });
 
+  it("persists the Caveman response style setting", async () => {
+    const updateSettings = vi
+      .fn<LocalApi["server"]["updateSettings"]>()
+      .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
+    window.nativeApi = {
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Caveman response style" }).click();
+    await page.getByText("Ultra").click();
+
+    await vi.waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        responseStyle: "ultra",
+      }),
+    );
+  });
+
   it("persists Amazon Q IAM Identity Center SSO settings", async () => {
     const updateSettings = vi
       .fn<LocalApi["server"]["updateSettings"]>()

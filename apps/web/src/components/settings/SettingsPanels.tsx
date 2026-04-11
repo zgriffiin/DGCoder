@@ -513,6 +513,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
         : []),
+      ...(settings.responseStyle !== DEFAULT_UNIFIED_SETTINGS.responseStyle
+        ? ["Caveman responses"]
+        : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
         : []),
@@ -535,6 +538,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.defaultThreadEnvMode,
       settings.diffWordWrap,
       settings.enableAssistantStreaming,
+      settings.responseStyle,
       settings.timestampFormat,
       theme,
     ],
@@ -968,6 +972,58 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Stream assistant messages"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Caveman responses"
+          description="Make agents answer in Caveman style. Full is the default upstream mode."
+          resetAction={
+            settings.responseStyle !== DEFAULT_UNIFIED_SETTINGS.responseStyle ? (
+              <SettingResetButton
+                label="caveman responses"
+                onClick={() =>
+                  updateSettings({
+                    responseStyle: DEFAULT_UNIFIED_SETTINGS.responseStyle,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.responseStyle}
+              onValueChange={(value) => {
+                if (value === "off" || value === "lite" || value === "full" || value === "ultra") {
+                  updateSettings({ responseStyle: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Caveman response style">
+                <SelectValue>
+                  {{
+                    off: "Off",
+                    lite: "Lite",
+                    full: "Full",
+                    ultra: "Ultra",
+                  }[settings.responseStyle] ?? "Full"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="off">
+                  Off
+                </SelectItem>
+                <SelectItem hideIndicator value="lite">
+                  Lite
+                </SelectItem>
+                <SelectItem hideIndicator value="full">
+                  Full
+                </SelectItem>
+                <SelectItem hideIndicator value="ultra">
+                  Ultra
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 

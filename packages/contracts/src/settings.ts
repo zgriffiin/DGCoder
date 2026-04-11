@@ -47,6 +47,9 @@ export type ThreadEnvMode = typeof ThreadEnvMode.Type;
 export const CliAgentExecutionMode = Schema.Literals(["auto", "host", "wsl"]);
 export type CliAgentExecutionMode = typeof CliAgentExecutionMode.Type;
 
+export const ResponseStyle = Schema.Literals(["off", "lite", "full", "ultra"]);
+export type ResponseStyle = typeof ResponseStyle.Type;
+
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
     Schema.decodeTo(
@@ -119,6 +122,9 @@ export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   defaultThreadEnvMode: ThreadEnvMode.pipe(
     Schema.withDecodingDefault(() => "local" as const satisfies ThreadEnvMode),
+  ),
+  responseStyle: ResponseStyle.pipe(
+    Schema.withDecodingDefault(() => "full" as const satisfies ResponseStyle),
   ),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
@@ -245,6 +251,7 @@ const QualityGateSettingsPatch = Schema.Struct({
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
+  responseStyle: Schema.optionalKey(ResponseStyle),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   observability: Schema.optionalKey(
     Schema.Struct({

@@ -43,11 +43,35 @@ function findBunBinaryPath() {
   return null;
 }
 
+function readPathValue(env) {
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === "path");
+  const value = key ? env[key] : undefined;
+  return typeof value === "string" ? value : "";
+}
+
+function writePathValue(env, value) {
+  const preferredKey =
+    Object.keys(env).find((candidate) => candidate.toLowerCase() === "path") ??
+    (process.platform === "win32" ? "Path" : "PATH");
+
+  for (const key of Object.keys(env)) {
+    if (key !== preferredKey && key.toLowerCase() === "path") {
+      delete env[key];
+    }
+  }
+
+  env[preferredKey] = value;
+}
+
 function prependPathEntries(env, entries) {
   const delimiter = path.delimiter;
-  const existingEntries = (env.PATH ?? "").split(delimiter).filter((entry) => entry.length > 0);
+  const existingEntries = readPathValue(env)
+    .split(delimiter)
+    .filter((entry) => entry.length > 0);
   const nextEntries = [...entries, ...existingEntries];
-  env.PATH = [...new Set(nextEntries)].join(delimiter);
+  // On Windows, passing both `PATH` and `Path` can drop one variant for child
+  // processes. Keep a single canonical key so downstream CLIs stay discoverable.
+  writePathValue(env, [...new Set(nextEntries)].join(delimiter));
 }
 
 if (!isExistingFile(turboBinPath)) {
