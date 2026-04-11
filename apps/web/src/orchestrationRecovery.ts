@@ -1,5 +1,6 @@
 export type OrchestrationRecoveryReason =
   | "bootstrap"
+  | "poll"
   | "sequence-gap"
   | "resubscribe"
   | "replay-failed";

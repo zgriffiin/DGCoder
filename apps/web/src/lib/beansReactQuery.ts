@@ -7,8 +7,11 @@ import type {
   BeansUpdateInput,
   EnvironmentId,
 } from "@t3tools/contracts";
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { ensureEnvironmentApi } from "~/environmentApi";
+
+const BEANS_STALE_TIME_MS = 5_000;
+const BEANS_REFETCH_INTERVAL_MS = 30_000;
 
 export const beansQueryKeys = {
   all: ["beans"] as const,
@@ -23,6 +26,40 @@ export const beansQueryKeys = {
   roadmap: (environmentId: EnvironmentId | null, cwd: string | null) =>
     ["beans", "roadmap", environmentId ?? null, cwd] as const,
 };
+
+function isBeansScopeQueryKey(
+  queryKey: QueryKey,
+  input?: { environmentId?: EnvironmentId | null; cwd?: string | null },
+): boolean {
+  if (queryKey[0] !== "beans") {
+    return false;
+  }
+
+  const environmentId = input?.environmentId ?? null;
+  const cwd = input?.cwd ?? null;
+  if (environmentId === null && cwd === null) {
+    return true;
+  }
+
+  const scopedEnvironmentId = queryKey[2];
+  const scopedCwd = queryKey[3];
+  if (environmentId !== null && scopedEnvironmentId !== environmentId) {
+    return false;
+  }
+  if (cwd !== null && scopedCwd !== cwd) {
+    return false;
+  }
+  return true;
+}
+
+export function invalidateBeansQueries(
+  queryClient: QueryClient,
+  input?: { environmentId?: EnvironmentId | null; cwd?: string | null },
+) {
+  return queryClient.invalidateQueries({
+    predicate: (query) => isBeansScopeQueryKey(query.queryKey, input),
+  });
+}
 
 export function beansProjectStateQueryOptions(input: {
   environmentId: EnvironmentId | null;
@@ -41,6 +78,9 @@ export function beansProjectStateQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.cwd !== null,
     staleTime: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: input.enabled === false ? false : BEANS_REFETCH_INTERVAL_MS,
   });
 }
 
@@ -70,7 +110,10 @@ export function beansListQueryOptions(input: {
       } satisfies BeansListInput);
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.cwd !== null,
-    staleTime: 5_000,
+    staleTime: BEANS_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: input.enabled === false ? false : BEANS_REFETCH_INTERVAL_MS,
   });
 }
 
@@ -90,7 +133,10 @@ export function beansRoadmapQueryOptions(input: {
       } satisfies BeansRoadmapInput);
     },
     enabled: (input.enabled ?? true) && input.environmentId !== null && input.cwd !== null,
-    staleTime: 5_000,
+    staleTime: BEANS_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: input.enabled === false ? false : BEANS_REFETCH_INTERVAL_MS,
   });
 }
 

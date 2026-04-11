@@ -24,7 +24,6 @@ interface ChatHeaderProps {
   activeThreadTitle: string;
   activeProjectId: ProjectId;
   activeProjectName: string | undefined;
-  activeProjectCwd: string | null;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -51,7 +50,6 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   activeProjectId,
   activeProjectName,
-  activeProjectCwd,
   isGitRepo,
   openInCwd,
   activeProjectScripts,
@@ -108,7 +106,7 @@ export const ChatHeader = memo(function ChatHeader({
           <BeansControl
             environmentId={activeThreadEnvironmentId}
             projectId={activeProjectId}
-            cwd={activeProjectCwd}
+            cwd={gitCwd}
           />
         )}
         {activeProjectName && (
