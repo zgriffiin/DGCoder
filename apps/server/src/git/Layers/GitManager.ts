@@ -1441,6 +1441,11 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     if (localDefaultBranch) {
       return localDefaultBranch;
     }
+    const currentLocalBranch =
+      branches.branches.find((branch) => !branch.isRemote && branch.current)?.name ?? null;
+    if (currentLocalBranch) {
+      return currentLocalBranch;
+    }
 
     return yield* gitManagerError(
       "resolveDefaultBranchName",

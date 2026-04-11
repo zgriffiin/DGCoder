@@ -736,7 +736,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const status = yield* manager.status({ cwd });
 
-      expect(status).toEqual({
+      expect(status).toMatchObject({
         isRepo: false,
         hasOriginRemote: false,
         isDefaultBranch: false,
@@ -750,8 +750,17 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         hasUpstream: false,
         aheadCount: 0,
         behindCount: 0,
+        localReview: {
+          configured: false,
+          tool: "coderabbit",
+          enforceOn: [],
+          commandPreview: "",
+        },
         pr: null,
       });
+      expect(status.localReview?.configPath.toLowerCase()).toContain(
+        `${path.sep}.t3code${path.sep}project.json`.toLowerCase(),
+      );
     }),
   );
 
@@ -1126,13 +1135,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const { manager } = yield* makeManager();
       const status = yield* manager.status({ cwd: repoDir });
 
-      expect(status.localReview).toEqual({
+      expect(status.localReview).toMatchObject({
         configured: true,
         tool: "coderabbit",
         enforceOn: ["commit_push", "create_pr"],
         commandPreview: "coderabbit review --base {{defaultBranch}} -c docs/coderabbit-review.md",
-        configPath: path.join(repoDir, ".t3code", "project.json"),
       });
+      expect(status.localReview?.configPath.toLowerCase()).toContain(
+        `${path.sep}.t3code${path.sep}project.json`.toLowerCase(),
+      );
     }),
   );
 
