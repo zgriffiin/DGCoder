@@ -405,9 +405,26 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           assistant_message_id AS "assistantMessageId",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId"
-        FROM projection_turns
-        WHERE turn_id IS NOT NULL
-        ORDER BY thread_id ASC, requested_at DESC, turn_id DESC
+        FROM (
+          SELECT
+            thread_id,
+            turn_id,
+            state,
+            requested_at,
+            started_at,
+            completed_at,
+            assistant_message_id,
+            source_proposed_plan_thread_id,
+            source_proposed_plan_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY requested_at DESC, turn_id DESC
+            ) AS reverse_row_number
+          FROM projection_turns
+          WHERE turn_id IS NOT NULL
+        )
+        WHERE reverse_row_number = 1
+        ORDER BY thread_id ASC
       `,
   });
 

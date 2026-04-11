@@ -220,6 +220,7 @@ function coalesceOrchestrationUiEvents(
 const REPLAY_RECOVERY_RETRY_DELAY_MS = 100;
 const MAX_NO_PROGRESS_REPLAY_RETRIES = 3;
 const SNAPSHOT_STATUS_POLL_INTERVAL_MS = 30_000;
+const RESUME_SNAPSHOT_RECOVERY_DEBOUNCE_MS = 5_000;
 
 function useRegisteredWsRpcClientEntries(): ReadonlyArray<WsRpcClientEntry> {
   const [, setRevision] = useState(0);
@@ -375,6 +376,7 @@ function EventRouter() {
     let disposed = false;
     disposedRef.current = false;
     let needsProviderInvalidation = false;
+    let lastResumeSnapshotRecoveryAtMs = 0;
     const primaryClientKey = getPrimaryWsRpcClientEntry().key;
 
     const reconcileSnapshotDerivedState = () => {
@@ -694,6 +696,12 @@ function EventRouter() {
         flushPendingDomainEvents,
         schedulePendingDomainEventFlush,
         runSnapshotRecovery,
+        runResumeSnapshotRecovery: () => {
+          if (boundEnvironmentId === null) {
+            return;
+          }
+          void runSnapshotRecovery("poll", boundEnvironmentId);
+        },
         cleanup: () => {
           flushPendingDomainEventsScheduled = false;
           pendingDomainEvents.length = 0;
@@ -705,6 +713,43 @@ function EventRouter() {
         },
       };
     });
+
+    const triggerResumeSnapshotRecovery = () => {
+      if (disposed || document.visibilityState === "hidden") {
+        return;
+      }
+
+      const nowMs = Date.now();
+      if (nowMs - lastResumeSnapshotRecoveryAtMs < RESUME_SNAPSHOT_RECOVERY_DEBOUNCE_MS) {
+        return;
+      }
+      lastResumeSnapshotRecoveryAtMs = nowMs;
+
+      for (const context of clientContexts) {
+        context.runResumeSnapshotRecovery();
+      }
+    };
+
+    const handleWindowFocus = () => {
+      triggerResumeSnapshotRecovery();
+    };
+    const handleWindowOnline = () => {
+      triggerResumeSnapshotRecovery();
+    };
+    const handlePageShow = () => {
+      triggerResumeSnapshotRecovery();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      triggerResumeSnapshotRecovery();
+    };
+
+    window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("online", handleWindowOnline);
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     schedulePendingDomainEventFlushRef.current = () => {
       for (const context of clientContexts) {
@@ -733,6 +778,10 @@ function EventRouter() {
       for (const context of clientContexts) {
         context.cleanup();
       }
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("online", handleWindowOnline);
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [
     applyOrchestrationEvents,
