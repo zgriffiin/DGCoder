@@ -219,6 +219,7 @@ function coalesceOrchestrationUiEvents(
 
 const REPLAY_RECOVERY_RETRY_DELAY_MS = 100;
 const MAX_NO_PROGRESS_REPLAY_RETRIES = 3;
+const SNAPSHOT_STATUS_POLL_INTERVAL_MS = 30_000;
 
 function useRegisteredWsRpcClientEntries(): ReadonlyArray<WsRpcClientEntry> {
   const [, setRevision] = useState(0);
@@ -518,7 +519,7 @@ function EventRouter() {
       };
 
       const runSnapshotRecovery = async (
-        reason: "bootstrap" | "replay-failed",
+        reason: "bootstrap" | "poll" | "replay-failed",
         environmentId: EnvironmentId,
       ): Promise<void> => {
         const started = recovery.beginSnapshotRecovery(reason);
@@ -645,6 +646,12 @@ function EventRouter() {
           })
           .catch(() => undefined);
       }
+      const snapshotPollInterval = window.setInterval(() => {
+        if (disposed || boundEnvironmentId === null) {
+          return;
+        }
+        void runSnapshotRecovery("poll", boundEnvironmentId);
+      }, SNAPSHOT_STATUS_POLL_INTERVAL_MS);
       const unsubDomainEvent = entry.client.orchestration.onDomainEvent(
         (event) => {
           const action = recovery.classifyDomainEvent(event.sequence);
@@ -694,6 +701,7 @@ function EventRouter() {
           unsubTerminalEvent();
           unsubLifecycle();
           unsubConfig();
+          window.clearInterval(snapshotPollInterval);
         },
       };
     });
