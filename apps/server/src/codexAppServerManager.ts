@@ -9,6 +9,7 @@ import {
   ProviderItemId,
   ProviderRequestKind,
   type ProviderUserInputAnswers,
+  type ResponseStyle,
   ThreadId,
   TurnId,
   type ProviderApprovalDecision,
@@ -32,6 +33,7 @@ import {
   type CodexAccountSnapshot,
 } from "./provider/codexAccount";
 import { buildCodexInitializeParams, killCodexChildProcess } from "./provider/codexAppServer";
+import { appendResponseStyleToDeveloperInstructions } from "./provider/responseStyle.ts";
 
 export { buildCodexInitializeParams } from "./provider/codexAppServer";
 export { readCodexAccountSnapshot, resolveCodexModelForAccount } from "./provider/codexAccount";
@@ -113,6 +115,7 @@ export interface CodexAppServerSendTurnInput {
   readonly serviceTier?: string | null;
   readonly effort?: string;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly responseStyle?: ResponseStyle;
 }
 
 export interface CodexAppServerStartSessionInput {
@@ -335,6 +338,7 @@ function buildCodexCollaborationMode(input: {
   readonly interactionMode?: "default" | "plan";
   readonly model?: string;
   readonly effort?: string;
+  readonly responseStyle?: ResponseStyle;
 }):
   | {
       mode: "default" | "plan";
@@ -354,10 +358,12 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
+      developer_instructions: appendResponseStyleToDeveloperInstructions(
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
           : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+        input.responseStyle ?? "off",
+      ),
     },
   };
 }
@@ -718,6 +724,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
+      ...(input.responseStyle !== undefined ? { responseStyle: input.responseStyle } : {}),
     });
     if (collaborationMode) {
       if (!turnStartParams.model) {

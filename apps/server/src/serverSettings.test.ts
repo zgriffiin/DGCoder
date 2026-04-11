@@ -42,6 +42,25 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.deepEqual(
         decodePatch({
+          responseStyle: "lite",
+          textGenerationModelSelection: {
+            options: {
+              fastMode: false,
+            },
+          },
+        }),
+        {
+          responseStyle: "lite",
+          textGenerationModelSelection: {
+            options: {
+              fastMode: false,
+            },
+          },
+        },
+      );
+
+      assert.deepEqual(
+        decodePatch({
           textGenerationModelSelection: {
             options: {
               fastMode: false,
@@ -64,6 +83,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverSettings = yield* ServerSettingsService;
 
       yield* serverSettings.updateSettings({
+        responseStyle: "ultra",
         providers: {
           codex: {
             binaryPath: "/usr/local/bin/codex",
@@ -91,6 +111,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
 
       const next = yield* serverSettings.updateSettings({
+        responseStyle: "lite",
         providers: {
           codex: {
             binaryPath: "/opt/homebrew/bin/codex",
@@ -106,6 +127,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         },
       });
 
+      assert.equal(next.responseStyle, "lite");
       assert.deepEqual(next.providers.codex, {
         enabled: true,
         binaryPath: "/opt/homebrew/bin/codex",
@@ -250,6 +272,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverConfig = yield* ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const next = yield* serverSettings.updateSettings({
+        responseStyle: "ultra",
         observability: {
           otlpTracesUrl: "http://localhost:4318/v1/traces",
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
@@ -269,6 +292,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       assert.deepEqual(JSON.parse(raw), {
+        responseStyle: "ultra",
         observability: {
           otlpTracesUrl: "http://localhost:4318/v1/traces",
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",

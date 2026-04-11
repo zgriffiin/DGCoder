@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import nodePath from "node:path";
+
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Data, Effect, FileSystem, Logger, Option, Path } from "effect";
@@ -34,6 +36,19 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Comm
     });
   }
 });
+
+function resolveCliBinary(command: "bun" | "npm"): string {
+  if (process.platform !== "win32") {
+    return command;
+  }
+
+  if (command === "bun") {
+    const bunInstall = process.env.BUN_INSTALL;
+    return bunInstall ? nodePath.join(bunInstall, "bin", "bun.exe") : "bun.exe";
+  }
+
+  return nodePath.join(nodePath.dirname(process.execPath), "npm.cmd");
+}
 
 interface PublishIconBackup {
   readonly targetPath: string;
@@ -131,13 +146,11 @@ const buildCmd = Command.make(
 
       yield* Effect.log("[cli] Running tsdown...");
       yield* runCommand(
-        ChildProcess.make({
+        ChildProcess.make(resolveCliBinary("bun"), ["tsdown"], {
           cwd: serverDir,
           stdout: config.verbose ? "inherit" : "ignore",
           stderr: "inherit",
-          // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
-          shell: process.platform === "win32",
-        })`bun tsdown`,
+        }),
       );
 
       const webDist = path.join(repoRoot, "apps/web/dist");
@@ -226,12 +239,10 @@ const publishCmd = Command.make(
 
             yield* Effect.log(`[cli] Running: npm ${args.join(" ")}`);
             yield* runCommand(
-              ChildProcess.make("npm", [...args], {
+              ChildProcess.make(resolveCliBinary("npm"), [...args], {
                 cwd: serverDir,
                 stdout: config.verbose ? "inherit" : "ignore",
                 stderr: "inherit",
-                // Windows needs shell mode to resolve .cmd shims.
-                shell: process.platform === "win32",
               }),
             );
           }),

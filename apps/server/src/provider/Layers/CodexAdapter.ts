@@ -1472,6 +1472,18 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       (attachment) => resolveAttachment(input, attachment),
       { concurrency: 1 },
     );
+    const responseStyle = yield* serverSettingsService.getSettings.pipe(
+      Effect.map((settings) => settings.responseStyle),
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+            detail: toMessage(cause, "Failed to read Codex settings."),
+            cause,
+          }),
+      ),
+    );
 
     return yield* Effect.tryPromise({
       try: () => {
@@ -1491,6 +1503,7 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.interactionMode !== undefined
             ? { interactionMode: input.interactionMode }
             : {}),
+          responseStyle,
           ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
         };
         return manager.sendTurn(managerInput);

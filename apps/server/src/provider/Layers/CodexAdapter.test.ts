@@ -279,6 +279,38 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
+        responseStyle: "full",
+      });
+    }),
+  );
+});
+
+const responseStyleManager = new FakeCodexManager();
+const responseStyleLayer = it.layer(
+  makeCodexAdapterLive({ manager: responseStyleManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest({ responseStyle: "full" })),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+responseStyleLayer("CodexAdapterLive response style", (it) => {
+  it.effect("passes the configured Caveman response style to the manager", () =>
+    Effect.gen(function* () {
+      responseStyleManager.sendTurnImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.sendTurn({
+        threadId: asThreadId("thread-response-style"),
+        input: "hello",
+        attachments: [],
+      });
+
+      assert.deepStrictEqual(responseStyleManager.sendTurnImpl.mock.calls[0]?.[0], {
+        threadId: asThreadId("thread-response-style"),
+        input: "hello",
+        responseStyle: "full",
       });
     }),
   );

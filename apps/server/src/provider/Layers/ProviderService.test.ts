@@ -243,7 +243,9 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
-function makeProviderServiceLayer() {
+function makeProviderServiceLayer(
+  serverSettingsOverrides: Parameters<typeof ServerSettingsService.layerTest>[0] = {},
+) {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter("claudeAgent");
   const registry: typeof ProviderAdapterRegistry.Service = {
@@ -267,7 +269,7 @@ function makeProviderServiceLayer() {
       makeProviderServiceLive().pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
-        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(ServerSettingsService.layerTest(serverSettingsOverrides)),
         Layer.provideMerge(AnalyticsService.layerTest),
       ),
       directoryLayer,
@@ -334,6 +336,7 @@ it.effect("ProviderServiceLive rejects new sessions for disabled providers", () 
 );
 
 const routing = makeProviderServiceLayer();
+const cavemanRouting = makeProviderServiceLayer({ responseStyle: "full" });
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-"));
@@ -905,6 +908,41 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+cavemanRouting.layer("ProviderServiceLive Caveman response style", (it) => {
+  it.effect("prepends Caveman style instructions before routing provider turns", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      const session = yield* provider.startSession(asThreadId("thread-caveman"), {
+        provider: "claudeAgent",
+        threadId: asThreadId("thread-caveman"),
+        cwd: "/tmp/project-caveman",
+        runtimeMode: "full-access",
+      });
+
+      cavemanRouting.claude.sendTurn.mockClear();
+
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "Explain this regression",
+        attachments: [],
+      });
+
+      const sendPayload = cavemanRouting.claude.sendTurn.mock.calls[0]?.[0];
+      assert.equal(typeof sendPayload === "object" && sendPayload !== null, true);
+      if (!sendPayload || typeof sendPayload !== "object") {
+        return;
+      }
+      assert.equal(
+        (sendPayload as { input?: string }).input?.startsWith(
+          "[Response style: Caveman] Use Caveman Full.",
+        ),
+        true,
+      );
+    }),
   );
 });
 

@@ -61,6 +61,22 @@ describe("ServerSettings providers", () => {
   });
 });
 
+describe("ServerSettings responseStyle", () => {
+  it("defaults Caveman response style to full", () => {
+    expect(DEFAULT_SERVER_SETTINGS.responseStyle).toBe("full");
+  });
+
+  it("accepts Caveman response style patches", () => {
+    expect(
+      decodeServerSettingsPatch({
+        responseStyle: "ultra",
+      }),
+    ).toEqual({
+      responseStyle: "ultra",
+    });
+  });
+});
+
 describe("ServerSettings qualityGate", () => {
   it("defaults project quality checks and maintainability thresholds", () => {
     expect(DEFAULT_SERVER_SETTINGS.qualityGate).toEqual({

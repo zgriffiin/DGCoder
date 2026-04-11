@@ -606,6 +606,39 @@ describe("sendTurn", () => {
     });
   });
 
+  it("appends Caveman instructions to Codex collaboration-mode developer instructions", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Implement this",
+      interactionMode: "default",
+      responseStyle: "full",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      input: [
+        {
+          type: "text",
+          text: "Implement this",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5.3-codex",
+          reasoning_effort: "medium",
+          developer_instructions: expect.stringContaining(
+            "[Response style: Caveman] Use Caveman Full.",
+          ),
+        },
+      },
+    });
+  });
+
   it("keeps the session model when interaction mode is set without an explicit model", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
     context.session.model = "gpt-5.2-codex";
