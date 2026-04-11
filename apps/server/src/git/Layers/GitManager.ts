@@ -20,6 +20,13 @@ import {
   sanitizeFeatureBranchName,
 } from "@t3tools/shared/git";
 import { appendChangeProofToCommitBody, parseCommitChangeProof } from "@t3tools/shared/changeProof";
+import {
+  buildLocalReviewCommandPreview,
+  defaultLocalReviewSummaryValues,
+  loadT3CodeProjectConfig,
+  resolveLocalReviewEnforceOn,
+  substituteLocalReviewArgs,
+} from "@t3tools/shared/projectConfig";
 
 import { GitManagerError } from "@t3tools/contracts";
 import {
@@ -33,18 +40,20 @@ import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { ProjectSetupScriptRunner } from "../../project/Services/ProjectSetupScriptRunner.ts";
 import { extractBranchNameFromRemoteRef } from "../remoteRefs.ts";
-import { runProcess } from "../../processRunner.ts";
+import { type ProcessRunResult, runProcess } from "../../processRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const FUNCTIONAL_VALIDATION_TIMEOUT_MS = 10 * 60_000;
 const FUNCTIONAL_VALIDATION_OUTPUT_LIMIT_BYTES = 96_000;
+const LOCAL_REVIEW_OUTPUT_LIMIT_BYTES = 96_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
 const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
+const LOCAL_REVIEW_HOOK_NAME = "CodeRabbit review";
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
@@ -461,6 +470,16 @@ function isCommitAction(
   return action === "commit" || action === "commit_push" || action === "commit_push_pr";
 }
 
+function resolveLocalReviewPhase(action: GitStackedAction): GitActionProgressPhase {
+  if (action === "push") {
+    return "push";
+  }
+  if (action === "create_pr") {
+    return "pr";
+  }
+  return "commit";
+}
+
 function formatCommitMessage(subject: string, body: string): string {
   const trimmedBody = body.trim();
   if (trimmedBody.length === 0) {
@@ -569,6 +588,28 @@ async function runFunctionalValidationCommand(input: {
       ? `Validation command "${input.commandLine}" ${timedOutDetail}.\n\n${output}`
       : `Validation command "${input.commandLine}" ${timedOutDetail}.`,
   );
+}
+
+async function runLocalReviewCommand(input: {
+  cwd: string;
+  command: string;
+  args: ReadonlyArray<string>;
+  timeoutMs: number;
+}): Promise<ProcessRunResult> {
+  return runProcess(input.command, input.args, {
+    cwd: input.cwd,
+    timeoutMs: input.timeoutMs,
+    maxBufferBytes: LOCAL_REVIEW_OUTPUT_LIMIT_BYTES,
+    outputMode: "truncate",
+    allowNonZeroExit: true,
+  });
+}
+
+function splitProgressLines(value: string): string[] {
+  return value
+    .split(/\r?\n/g)
+    .map((line) => sanitizeProgressText(line))
+    .filter((line): line is string => line !== null);
 }
 
 function appendUnique(values: string[], next: string | null | undefined): void {
@@ -809,6 +850,52 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     aheadCount: 0,
     behindCount: 0,
   } satisfies GitStatusDetails;
+  const readLocalReviewSummary = Effect.fn("readLocalReviewSummary")(function* (cwd: string) {
+    const defaults = defaultLocalReviewSummaryValues();
+    const configResult = yield* Effect.sync(() => loadT3CodeProjectConfig(cwd));
+
+    if (configResult.status === "missing") {
+      return {
+        configured: false,
+        tool: defaults.tool,
+        enforceOn: [],
+        commandPreview: "",
+        configPath: configResult.configPath,
+      };
+    }
+
+    if (configResult.status === "invalid") {
+      return {
+        configured: true,
+        tool: defaults.tool,
+        enforceOn: [...defaults.enforceOn],
+        commandPreview: "(invalid local review config)",
+        configPath: configResult.configPath,
+        invalidReason: configResult.reason,
+      };
+    }
+
+    if (!configResult.config.localReview) {
+      return {
+        configured: false,
+        tool: defaults.tool,
+        enforceOn: [],
+        commandPreview: "",
+        configPath: configResult.configPath,
+      };
+    }
+
+    return {
+      configured: true,
+      tool: configResult.config.localReview.tool,
+      enforceOn: [...configResult.config.localReview.enforceOn],
+      commandPreview: buildLocalReviewCommandPreview(
+        configResult.config.localReview.command,
+        configResult.config.localReview.args,
+      ),
+      configPath: configResult.configPath,
+    };
+  });
   const readLocalStatus = Effect.fn("readLocalStatus")(function* (cwd: string) {
     const details = yield* gitCore
       .statusDetailsLocal(cwd)
@@ -818,6 +905,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     const hostingProvider = details.isRepo
       ? yield* resolveHostingProvider(cwd, details.branch)
       : null;
+    const localReview = yield* readLocalReviewSummary(cwd);
 
     return {
       isRepo: details.isRepo,
@@ -826,6 +914,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       isDefaultBranch: details.isDefaultBranch,
       branch: details.branch,
       hasWorkingTreeChanges: details.hasWorkingTreeChanges,
+      localReview,
       workingTree: details.workingTree,
     } satisfies GitStatusLocalResult;
   });
@@ -1330,6 +1419,187 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
         ].join("\n"),
       );
     }
+  });
+
+  const resolveDefaultBranchName = Effect.fn("resolveDefaultBranchName")(function* (cwd: string) {
+    const defaultRef = yield* gitCore.execute({
+      operation: "GitManager.resolveDefaultBranchName.defaultRef",
+      cwd,
+      args: ["symbolic-ref", "refs/remotes/origin/HEAD"],
+      allowNonZeroExit: true,
+    });
+    if (defaultRef.code === 0) {
+      const defaultBranch = defaultRef.stdout.trim().replace(/^refs\/remotes\/origin\//, "");
+      if (defaultBranch.length > 0) {
+        return defaultBranch;
+      }
+    }
+
+    const branches = yield* gitCore.listBranches({ cwd });
+    const localDefaultBranch =
+      branches.branches.find((branch) => !branch.isRemote && branch.isDefault)?.name ?? null;
+    if (localDefaultBranch) {
+      return localDefaultBranch;
+    }
+
+    return yield* gitManagerError(
+      "resolveDefaultBranchName",
+      'Cannot resolve default branch for local review token "{{defaultBranch}}".',
+    );
+  });
+
+  const emitBufferedProcessOutput = Effect.fn("emitBufferedProcessOutput")(function* (
+    hookName: string,
+    result: Pick<ProcessRunResult, "stdout" | "stderr" | "stdoutTruncated" | "stderrTruncated">,
+    emit: GitActionProgressEmitter,
+  ) {
+    for (const text of splitProgressLines(result.stdout)) {
+      yield* emit({
+        kind: "hook_output",
+        hookName,
+        stream: "stdout",
+        text,
+      });
+    }
+    if (result.stdoutTruncated) {
+      yield* emit({
+        kind: "hook_output",
+        hookName,
+        stream: "stdout",
+        text: "[stdout truncated]",
+      });
+    }
+
+    for (const text of splitProgressLines(result.stderr)) {
+      yield* emit({
+        kind: "hook_output",
+        hookName,
+        stream: "stderr",
+        text,
+      });
+    }
+    if (result.stderrTruncated) {
+      yield* emit({
+        kind: "hook_output",
+        hookName,
+        stream: "stderr",
+        text: "[stderr truncated]",
+      });
+    }
+  });
+
+  const runConfiguredLocalReview = Effect.fn("runConfiguredLocalReview")(function* (
+    cwd: string,
+    action: GitStackedAction,
+    emit: GitActionProgressEmitter,
+  ) {
+    const configResult = yield* Effect.sync(() => loadT3CodeProjectConfig(cwd));
+    const enforcedActions =
+      configResult.status === "loaded"
+        ? resolveLocalReviewEnforceOn(configResult.config.localReview)
+        : [...defaultLocalReviewSummaryValues().enforceOn];
+
+    if (!enforcedActions.includes(action)) {
+      return;
+    }
+
+    if (configResult.status === "missing") {
+      return;
+    }
+
+    if (configResult.status === "invalid") {
+      return yield* gitManagerError(
+        "runConfiguredLocalReview",
+        `Local review config at "${configResult.configPath}" is invalid.\n\n${configResult.reason}`,
+      );
+    }
+
+    const localReview = configResult.config.localReview;
+    if (!localReview) {
+      return;
+    }
+
+    const defaultBranch = localReview.args.some((arg) => arg.includes("{{defaultBranch}}"))
+      ? yield* resolveDefaultBranchName(cwd)
+      : null;
+    const resolvedArgs = yield* Effect.try({
+      try: () =>
+        substituteLocalReviewArgs(localReview.args, {
+          defaultBranch: defaultBranch ?? "",
+        }),
+      catch: (cause) =>
+        gitManagerError(
+          "runConfiguredLocalReview",
+          cause instanceof Error ? cause.message : "Failed to resolve local review command args.",
+          cause,
+        ),
+    });
+    const commandPreview = buildLocalReviewCommandPreview(localReview.command, resolvedArgs);
+    const phase = resolveLocalReviewPhase(action);
+    const startedAt = Date.now();
+
+    yield* emit({
+      kind: "phase_started",
+      phase,
+      label: "Running CodeRabbit review...",
+    });
+    yield* emit({
+      kind: "hook_started",
+      hookName: LOCAL_REVIEW_HOOK_NAME,
+    });
+
+    const execution = yield* Effect.exit(
+      Effect.tryPromise({
+        try: () =>
+          runLocalReviewCommand({
+            cwd,
+            command: localReview.command,
+            args: resolvedArgs,
+            timeoutMs: localReview.timeoutMs,
+          }),
+        catch: (cause) =>
+          gitManagerError(
+            "runConfiguredLocalReview",
+            cause instanceof Error
+              ? `CodeRabbit local review "${commandPreview}" failed to start.\n\n${cause.message}`
+              : `CodeRabbit local review "${commandPreview}" failed to start.`,
+            cause,
+          ),
+      }),
+    );
+    if (Exit.isFailure(execution)) {
+      yield* emit({
+        kind: "hook_finished",
+        hookName: LOCAL_REVIEW_HOOK_NAME,
+        exitCode: null,
+        durationMs: Date.now() - startedAt,
+      });
+      return yield* Effect.failCause(execution.cause);
+    }
+
+    const result = execution.value;
+    yield* emitBufferedProcessOutput(LOCAL_REVIEW_HOOK_NAME, result, emit);
+    yield* emit({
+      kind: "hook_finished",
+      hookName: LOCAL_REVIEW_HOOK_NAME,
+      exitCode: result.code,
+      durationMs: Date.now() - startedAt,
+    });
+
+    if (!result.timedOut && result.code === 0) {
+      return;
+    }
+
+    const output = normalizeCommandOutput(result.stdout, result.stderr);
+    const failureDetail = result.timedOut
+      ? `timed out after ${localReview.timeoutMs / 1_000}s`
+      : `failed with exit code ${result.code ?? "null"}`;
+    return yield* gitManagerError(
+      "runConfiguredLocalReview",
+      output
+        ? `CodeRabbit local review "${commandPreview}" ${failureDetail}.\n\n${output}`
+        : `CodeRabbit local review "${commandPreview}" ${failureDetail}.`,
+    );
   });
 
   const runCommitStep = Effect.fn("runCommitStep")(function* (
@@ -1905,6 +2175,8 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
 
         const currentBranch = branchStep.name ?? initialStatus.branch;
         const commitAction = isCommitAction(input.action) ? input.action : null;
+
+        yield* runConfiguredLocalReview(input.cwd, input.action, progress.emit);
 
         const commit = commitAction
           ? yield* Ref.set(currentPhase, Option.some("commit")).pipe(

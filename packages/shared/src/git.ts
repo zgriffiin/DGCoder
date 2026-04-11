@@ -276,6 +276,7 @@ function toLocalStatusPart(status: GitStatusResult): GitStatusLocalResult {
     isDefaultBranch: status.isDefaultBranch,
     branch: status.branch,
     hasWorkingTreeChanges: status.hasWorkingTreeChanges,
+    ...(status.localReview ? { localReview: status.localReview } : {}),
     workingTree: status.workingTree,
   };
 }

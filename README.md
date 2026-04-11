@@ -183,6 +183,49 @@ activity to the thread. The default gate checks:
 
 Quality-gate settings are configurable from the app settings UI.
 
+### Local CodeRabbit Review
+
+This repo can also enforce local CodeRabbit review before selected Git actions through a
+repo-tracked file: `.t3code/project.json`.
+
+Current model:
+
+- GitHub PR review stays in `.github/workflows/coderabbit-review.yml`
+- local review policy lives in the repo
+- the app enforces that repo policy before commit/push/PR actions
+- the app does not store CodeRabbit secrets or auth state
+
+Example config:
+
+```json
+{
+  "version": 1,
+  "localReview": {
+    "tool": "coderabbit",
+    "command": "coderabbit",
+    "args": [
+      "review",
+      "--plain",
+      "--type",
+      "committed",
+      "--base",
+      "{{defaultBranch}}",
+      "-c",
+      "docs/coderabbit-review.md"
+    ],
+    "enforceOn": ["commit_push", "commit_push_pr", "create_pr"],
+    "timeoutMs": 300000
+  }
+}
+```
+
+Notes:
+
+- authenticate CodeRabbit locally outside the app
+- `{{defaultBranch}}` is the only supported token in v1
+- local review and GitHub PR review are complementary, not replacements
+- invalid `.t3code/project.json` blocks enforced actions until fixed
+
 ## Repository Layout
 
 - `apps/server`: Node/Bun WebSocket server, provider adapters, orchestration, persistence,

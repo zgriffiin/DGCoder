@@ -1,9 +1,11 @@
 import type { GitStatusResult } from "@t3tools/contracts";
-import { assert, describe, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  getLocalReviewActionBlockReason,
   isCommitDialogAction,
+  isLocalReviewActionEnforced,
   requiresDefaultBranchConfirmation,
   resolveCommitDialogCopy,
   resolveAutoFeatureBranchName,
@@ -32,6 +34,64 @@ function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
     ...overrides,
   };
 }
+
+describe("local review helpers", () => {
+  it("marks enforced actions from repo config", () => {
+    expect(
+      isLocalReviewActionEnforced(
+        {
+          configured: true,
+          tool: "coderabbit",
+          enforceOn: ["commit_push", "create_pr"],
+          commandPreview: "coderabbit review --base {{defaultBranch}}",
+          configPath: "/repo/.t3code/project.json",
+        },
+        "create_pr",
+      ),
+    ).toBe(true);
+    expect(
+      isLocalReviewActionEnforced(
+        {
+          configured: true,
+          tool: "coderabbit",
+          enforceOn: ["commit_push", "create_pr"],
+          commandPreview: "coderabbit review --base {{defaultBranch}}",
+          configPath: "/repo/.t3code/project.json",
+        },
+        "push",
+      ),
+    ).toBe(false);
+  });
+
+  it("returns a blocking reason only for invalid enforced actions", () => {
+    expect(
+      getLocalReviewActionBlockReason(
+        {
+          configured: true,
+          tool: "coderabbit",
+          enforceOn: ["commit_push_pr"],
+          commandPreview: "(invalid local review config)",
+          configPath: "/repo/.t3code/project.json",
+          invalidReason: "Missing required command field.",
+        },
+        "commit_push_pr",
+      ),
+    ).toContain("Missing required command field.");
+    expect(
+      getLocalReviewActionBlockReason(
+        {
+          configured: true,
+          tool: "coderabbit",
+          enforceOn: ["commit_push_pr"],
+          commandPreview: "(invalid local review config)",
+          configPath: "/repo/.t3code/project.json",
+          invalidReason: "Missing required command field.",
+        },
+        "push",
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("when: branch is clean and has an open PR", () => {
   it("resolveQuickAction opens the existing PR", () => {
