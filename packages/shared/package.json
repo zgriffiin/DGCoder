@@ -67,6 +67,10 @@
     "./terminalText": {
       "types": "./src/terminalText.ts",
       "import": "./src/terminalText.ts"
+    },
+    "./threadHistoryWindow": {
+      "types": "./src/threadHistoryWindow.ts",
+      "import": "./src/threadHistoryWindow.ts"
     }
   },
   "scripts": {

@@ -45,6 +45,12 @@ describe("wsConnectionState", () => {
     expect(getWsConnectionUiState(getWsConnectionStatus())).toBe("connecting");
   });
 
+  it("redacts query params from stored websocket URLs", () => {
+    recordWsConnectionAttempt("ws://localhost:3020/ws?token=secret-token");
+
+    expect(getWsConnectionStatus().socketUrl).toBe("ws://localhost:3020/ws");
+  });
+
   it("schedules the next retry after a failed websocket attempt", () => {
     recordWsConnectionAttempt("ws://localhost:3020/ws");
     recordWsConnectionErrored("Unable to connect to the T3 server WebSocket.");

@@ -1,5 +1,5 @@
 import type { RepositoryIdentity } from "@t3tools/contracts";
-import { Cache, Duration, Effect, Exit, Layer } from "effect";
+import { Cache, Duration, Effect, Exit, Layer, Option } from "effect";
 import { detectGitHostingProviderFromRemoteUrl, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 
 import { runProcess } from "../../processRunner.ts";
@@ -65,7 +65,7 @@ function buildRepositoryIdentity(input: {
 }
 
 const DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY = 512;
-const DEFAULT_POSITIVE_CACHE_TTL = Duration.minutes(1);
+const DEFAULT_POSITIVE_CACHE_TTL = Duration.minutes(15);
 const DEFAULT_NEGATIVE_CACHE_TTL = Duration.seconds(10);
 
 interface RepositoryIdentityResolverOptions {
@@ -132,6 +132,15 @@ export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityR
       "RepositoryIdentityResolver.resolve",
     )(function* (cwd) {
       const cacheKey = yield* Effect.promise(() => resolveRepositoryIdentityCacheKey(cwd));
+      const cachedIdentity = yield* Cache.getOption(repositoryIdentityCache, cacheKey);
+      if (Option.isSome(cachedIdentity)) {
+        return cachedIdentity.value;
+      }
+
+      yield* Effect.logDebug("Repository identity cache miss", {
+        cacheKey,
+      });
+
       return yield* Cache.get(repositoryIdentityCache, cacheKey);
     });
 

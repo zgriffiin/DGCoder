@@ -1,4 +1,5 @@
 import { CheckpointRef, EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { THREAD_MESSAGES_WINDOW_SIZE } from "@t3tools/shared/threadHistoryWindow";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -341,6 +342,112 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
         },
       ]);
+    }),
+  );
+
+  it.effect("limits per-thread snapshot message hydration to the configured history window", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-windowed',
+          'Windowed Project',
+          '/tmp/windowed-project',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-03-03T00:00:00.000Z',
+          '2026-03-03T00:00:00.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-windowed',
+          'project-windowed',
+          'Windowed Thread',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access',
+          'default',
+          NULL,
+          NULL,
+          NULL,
+          '2026-03-03T00:00:01.000Z',
+          '2026-03-03T00:00:01.000Z',
+          NULL,
+          NULL
+        )
+      `;
+
+      for (let index = 0; index < THREAD_MESSAGES_WINDOW_SIZE + 5; index += 1) {
+        const timestamp = new Date(Date.UTC(2026, 2, 3, 0, 0, index)).toISOString();
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id,
+            thread_id,
+            turn_id,
+            role,
+            text,
+            is_streaming,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${`message-${index}`},
+            'thread-windowed',
+            NULL,
+            'assistant',
+            ${`message ${index}`},
+            0,
+            ${timestamp},
+            ${timestamp}
+          )
+        `;
+      }
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      const thread = snapshot.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-windowed"),
+      );
+
+      assert.notEqual(thread, undefined);
+      assert.equal(thread?.messages.length, THREAD_MESSAGES_WINDOW_SIZE);
+      assert.equal(thread?.messages[0]?.id, asMessageId("message-5"));
+      assert.equal(
+        thread?.messages.at(-1)?.id,
+        asMessageId(`message-${THREAD_MESSAGES_WINDOW_SIZE + 4}`),
+      );
     }),
   );
 

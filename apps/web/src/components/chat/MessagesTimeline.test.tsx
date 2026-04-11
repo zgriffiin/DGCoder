@@ -2,6 +2,8 @@ import { MessageId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
+
 function matchMedia() {
   return {
     matches: false,
@@ -42,11 +44,14 @@ beforeAll(() => {
   });
 });
 
+beforeAll(async () => {
+  ({ MessagesTimeline } = await import("./MessagesTimeline"));
+}, 20_000);
+
 const ACTIVE_THREAD_ENVIRONMENT_ID = "environment-local" as never;
 
 describe("MessagesTimeline", () => {
-  it("renders inline terminal labels with the composer chip UI", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
+  it("renders inline terminal labels with the composer chip UI", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -98,10 +103,9 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Terminal 1 lines 1-5");
     expect(markup).toContain("lucide-terminal");
     expect(markup).toContain("yoo what&#x27;s ");
-  }, 10_000);
+  });
 
-  it("renders context compaction entries in the normal work log", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
+  it("renders context compaction entries in the normal work log", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -145,8 +149,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Work log");
   });
 
-  it("marks detailed work log entries as openable", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
+  it("marks detailed work log entries as openable", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages

@@ -62,7 +62,21 @@ export const resolveServerUrl = (options?: {
     parsedUrl.pathname = "/";
   }
   if (options?.searchParams) {
-    parsedUrl.search = new URLSearchParams(options.searchParams).toString();
+    const mergedSearchParams = new URLSearchParams(parsedUrl.search);
+    for (const [key, value] of Object.entries(options.searchParams)) {
+      mergedSearchParams.set(key, value);
+    }
+    parsedUrl.search = mergedSearchParams.toString();
   }
   return parsedUrl.toString();
+};
+
+export const redactUrlForDisplay = (rawUrl: string): string => {
+  try {
+    const parsedUrl = new URL(rawUrl);
+    parsedUrl.search = "";
+    return parsedUrl.toString();
+  } catch {
+    return rawUrl.split("?")[0] ?? rawUrl;
+  }
 };

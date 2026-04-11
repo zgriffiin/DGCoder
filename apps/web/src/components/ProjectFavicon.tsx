@@ -6,7 +6,7 @@ const loadedProjectFaviconSrcs = new Set<string>();
 
 export function ProjectFavicon({ cwd, className }: { cwd: string; className?: string }) {
   const src = resolveServerUrl({
-    protocol: "http",
+    protocol: window.location.protocol === "https:" ? "https" : "http",
     pathname: "/api/project-favicon",
     searchParams: { cwd },
   });

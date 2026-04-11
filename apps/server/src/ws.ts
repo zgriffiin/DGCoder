@@ -19,10 +19,12 @@ import {
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
+import { ORCHESTRATION_REPLAY_BATCH_SIZE } from "@t3tools/shared/threadHistoryWindow";
 import { clamp } from "effect/Number";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+import { isRequestAuthorized, unauthorizedResponse } from "./auth";
 import {
   archiveBeansProject,
   createBean,
@@ -488,9 +490,14 @@ const WsRpcLayer = WsRpcGroup.toLayer(
         observeRpcEffect(
           ORCHESTRATION_WS_METHODS.replayEvents,
           Stream.runCollect(
-            orchestrationEngine.readEvents(
-              clamp(input.fromSequenceExclusive, { maximum: Number.MAX_SAFE_INTEGER, minimum: 0 }),
-            ),
+            orchestrationEngine
+              .readEvents(
+                clamp(input.fromSequenceExclusive, {
+                  maximum: Number.MAX_SAFE_INTEGER,
+                  minimum: 0,
+                }),
+              )
+              .pipe(Stream.take(ORCHESTRATION_REPLAY_BATCH_SIZE)),
           ).pipe(
             Effect.map((events) => Array.from(events)),
             Effect.flatMap(enrichOrchestrationEvents),
@@ -853,15 +860,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const config = yield* ServerConfig;
-        if (config.authToken) {
-          const url = HttpServerRequest.toURL(request);
-          if (Option.isNone(url)) {
-            return HttpServerResponse.text("Invalid WebSocket URL", { status: 400 });
-          }
-          const token = url.value.searchParams.get("token");
-          if (token !== config.authToken) {
-            return HttpServerResponse.text("Unauthorized WebSocket connection", { status: 401 });
-          }
+        if (config.authToken && Option.isNone(HttpServerRequest.toURL(request))) {
+          return HttpServerResponse.text("Invalid WebSocket URL", { status: 400 });
+        }
+        if (!isRequestAuthorized(request, config.authToken)) {
+          return unauthorizedResponse("Unauthorized WebSocket connection");
         }
         return yield* rpcWebSocketHttpEffect;
       }),

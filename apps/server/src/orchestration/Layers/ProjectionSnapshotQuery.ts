@@ -30,6 +30,12 @@ import {
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
+import {
+  THREAD_ACTIVITIES_WINDOW_SIZE,
+  THREAD_CHECKPOINTS_WINDOW_SIZE,
+  THREAD_MESSAGES_WINDOW_SIZE,
+  THREAD_PROPOSED_PLANS_WINDOW_SIZE,
+} from "@t3tools/shared/threadHistoryWindow";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
@@ -225,7 +231,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
-        FROM projection_thread_messages
+        FROM (
+          SELECT
+            message_id,
+            thread_id,
+            turn_id,
+            role,
+            text,
+            attachments_json,
+            is_streaming,
+            created_at,
+            updated_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY created_at DESC, message_id DESC
+            ) AS reverse_row_number
+          FROM projection_thread_messages
+        )
+        WHERE reverse_row_number <= ${THREAD_MESSAGES_WINDOW_SIZE}
         ORDER BY thread_id ASC, created_at ASC, message_id ASC
       `,
   });
@@ -244,7 +267,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           implementation_thread_id AS "implementationThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
-        FROM projection_thread_proposed_plans
+        FROM (
+          SELECT
+            plan_id,
+            thread_id,
+            turn_id,
+            plan_markdown,
+            implemented_at,
+            implementation_thread_id,
+            created_at,
+            updated_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY created_at DESC, plan_id DESC
+            ) AS reverse_row_number
+          FROM projection_thread_proposed_plans
+        )
+        WHERE reverse_row_number <= ${THREAD_PROPOSED_PLANS_WINDOW_SIZE}
         ORDER BY thread_id ASC, created_at ASC, plan_id ASC
       `,
   });
@@ -264,7 +303,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           payload_json AS "payload",
           sequence,
           created_at AS "createdAt"
-        FROM projection_thread_activities
+        FROM (
+          SELECT
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC,
+                created_at DESC,
+                activity_id DESC
+            ) AS reverse_row_number
+          FROM projection_thread_activities
+        )
+        WHERE reverse_row_number <= ${THREAD_ACTIVITIES_WINDOW_SIZE}
         ORDER BY
           thread_id ASC,
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
@@ -308,8 +368,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
-        FROM projection_turns
-        WHERE checkpoint_turn_count IS NOT NULL
+        FROM (
+          SELECT
+            thread_id,
+            turn_id,
+            checkpoint_turn_count,
+            checkpoint_ref,
+            checkpoint_status,
+            checkpoint_files_json,
+            assistant_message_id,
+            completed_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY checkpoint_turn_count DESC
+            ) AS reverse_row_number
+          FROM projection_turns
+          WHERE checkpoint_turn_count IS NOT NULL
+        )
+        WHERE reverse_row_number <= ${THREAD_CHECKPOINTS_WINDOW_SIZE}
         ORDER BY thread_id ASC, checkpoint_turn_count ASC
       `,
   });

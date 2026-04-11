@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/unstable/reactivity";
 
 import { appAtomRegistry } from "./atomRegistry";
+import { redactUrlForDisplay } from "../lib/utils";
 
 export type WsConnectionUiState = "connected" | "connecting" | "error" | "offline" | "reconnecting";
 export type WsReconnectPhase = "attempting" | "exhausted" | "idle" | "waiting";
@@ -93,7 +94,7 @@ export function recordWsConnectionAttempt(socketUrl: string): WsConnectionStatus
     phase: "connecting",
     reconnectAttemptCount: current.phase === "connected" ? 1 : current.reconnectAttemptCount + 1,
     reconnectPhase: "attempting",
-    socketUrl,
+    socketUrl: redactUrlForDisplay(socketUrl),
   }));
 }
 

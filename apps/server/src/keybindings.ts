@@ -32,6 +32,7 @@ import {
   Path,
   Layer,
   Option,
+  PlatformError,
   Predicate,
   PubSub,
   Schema,
@@ -447,6 +448,16 @@ function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
   };
 }
 
+function isTransientWindowsRenameError(
+  cause: unknown,
+): cause is { readonly code?: string | undefined } {
+  if (process.platform !== "win32" || typeof cause !== "object" || cause === null) {
+    return false;
+  }
+  const code = "code" in cause ? cause.code : undefined;
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
 function mergeWithDefaultKeybindings(custom: ResolvedKeybindingsConfig): ResolvedKeybindingsConfig {
   if (custom.length === 0) {
     return [...DEFAULT_RESOLVED_KEYBINDINGS];
@@ -663,12 +674,27 @@ const makeKeybindings = Effect.gen(function* () {
 
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {
     const tempPath = `${keybindingsConfigPath}.${process.pid}.${Date.now()}.tmp`;
+    const renameIntoPlace = (attempt = 0): Effect.Effect<void, PlatformError.PlatformError> =>
+      fs.rename(tempPath, keybindingsConfigPath).pipe(
+        Effect.catchIf(isTransientWindowsRenameError, (cause) => {
+          if (attempt >= 4) {
+            return Effect.fail(cause);
+          }
+          return fs
+            .remove(keybindingsConfigPath, { force: true })
+            .pipe(
+              Effect.ignore,
+              Effect.andThen(Effect.sleep(Duration.millis(25 * (attempt + 1)))),
+              Effect.andThen(renameIntoPlace(attempt + 1)),
+            );
+        }),
+      );
 
     return Schema.encodeEffect(KeybindingsConfigPrettyJson)(rules).pipe(
       Effect.map((encoded) => `${encoded}\n`),
       Effect.tap(() => fs.makeDirectory(path.dirname(keybindingsConfigPath), { recursive: true })),
       Effect.tap((encoded) => fs.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fs.rename(tempPath, keybindingsConfigPath)),
+      Effect.flatMap(() => renameIntoPlace()),
       Effect.ensuring(fs.remove(tempPath, { force: true }).pipe(Effect.ignore({ log: true }))),
       Effect.mapError(
         (cause) =>

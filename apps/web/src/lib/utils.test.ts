@@ -9,7 +9,7 @@ vi.mock("../environmentBootstrap", () => ({
 }));
 
 import { isWindowsPlatform } from "./utils";
-import { resolveServerUrl } from "./utils";
+import { redactUrlForDisplay, resolveServerUrl } from "./utils";
 
 describe("isWindowsPlatform", () => {
   it("matches Windows platform identifiers", () => {
@@ -50,6 +50,25 @@ describe("resolveServerUrl", () => {
 
     expect(resolveServerUrl({ url: "https://override.test:9999" })).toBe(
       "https://override.test:9999/",
+    );
+  });
+
+  it("preserves existing query params while merging explicit search params", () => {
+    expect(
+      resolveServerUrl({
+        url: "ws://desktop.test:4321/?token=secret-token",
+        protocol: "http",
+        pathname: "/api/project-favicon",
+        searchParams: { cwd: "/repo" },
+      }),
+    ).toBe("http://desktop.test:4321/api/project-favicon?token=secret-token&cwd=%2Frepo");
+  });
+});
+
+describe("redactUrlForDisplay", () => {
+  it("removes query strings from display URLs", () => {
+    expect(redactUrlForDisplay("ws://localhost:3020/ws?token=secret-token")).toBe(
+      "ws://localhost:3020/ws",
     );
   });
 });

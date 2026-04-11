@@ -1,3 +1,4 @@
+import * as NFS from "node:fs";
 import os from "node:os";
 
 import { assert, expect, it } from "@effect/vitest";
@@ -25,8 +26,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     const fs = yield* FileSystem.FileSystem;
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
     yield* fs.writeFileString(filePath, `${JSON.stringify(payload)}\n`);
-    const { fd } = yield* fs.open(filePath, { flag: "r" });
-    return fd;
+    // readBootstrapEnvelope owns the descriptor lifecycle via autoClose, so the
+    // test helper must not attach a second scoped close around the same fd.
+    return NFS.openSync(filePath, "r");
   });
 
   it.effect("falls back to effect/config values when flags are omitted", () =>
@@ -157,8 +159,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
   it.effect("uses bootstrap envelope values as fallbacks when flags and env are absent", () =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const { join } = yield* Path.Path;
-      const baseDir = "/tmp/t3-bootstrap-home";
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bootstrap-home-" });
       const fd = yield* openBootstrapFd({
         mode: "desktop",
         port: 4888,
