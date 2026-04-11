@@ -22,11 +22,13 @@ class MockWebSocket {
 
   readyState = MockWebSocket.CONNECTING;
   readonly sent: string[] = [];
+  readonly protocols: string | string[] | undefined;
   readonly url: string;
   private readonly listeners = new Map<WsEventType, Set<WsListener>>();
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     this.url = url;
+    this.protocols = protocols;
     sockets.push(this);
   }
 
@@ -151,6 +153,7 @@ describe("WsRpcAtomClient", () => {
     });
 
     const socket = getSocket();
+    expect(socket.protocols).toBeUndefined();
     socket.open();
 
     await waitFor(() => {

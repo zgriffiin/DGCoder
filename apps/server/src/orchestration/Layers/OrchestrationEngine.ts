@@ -50,6 +50,9 @@ interface CommandEnvelope {
   startedAtMs: number;
 }
 
+const ORCHESTRATION_COMMAND_QUEUE_CAPACITY = 1_024;
+const ORCHESTRATION_DOMAIN_EVENT_BUFFER_CAPACITY = 4_096;
+
 function commandToAggregateRef(command: OrchestrationCommand): {
   readonly aggregateKind: "project" | "thread";
   readonly aggregateId: ProjectId | ThreadId;
@@ -79,8 +82,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   let readModel = createEmptyReadModel(new Date().toISOString());
 
-  const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
-  const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
+  const commandQueue = yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY);
+  const eventPubSub = yield* PubSub.bounded<OrchestrationEvent>(
+    ORCHESTRATION_DOMAIN_EVENT_BUFFER_CAPACITY,
+  );
 
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
     const dispatchStartSequence = readModel.snapshotSequence;

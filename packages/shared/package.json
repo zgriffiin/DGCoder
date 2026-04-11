@@ -71,6 +71,10 @@
     "./threadHistoryWindow": {
       "types": "./src/threadHistoryWindow.ts",
       "import": "./src/threadHistoryWindow.ts"
+    },
+    "./webSocketAuthProtocol": {
+      "types": "./src/webSocketAuthProtocol.ts",
+      "import": "./src/webSocketAuthProtocol.ts"
     }
   },
   "scripts": {

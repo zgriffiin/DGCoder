@@ -29,7 +29,24 @@ Recent work in this fork includes:
 - Kiro and Amazon Q CLI-agent adapters.
 - Provider status/settings for Codex, Claude, Kiro, and Amazon Q.
 - Orchestration event recovery fixes for session restart and reconnect flows.
+- Resume-triggered snapshot recovery on focus/online/visibility changes, so stale long-running
+  sessions re-sync without a full app restart.
 - Session completion and diff rendering fixes for smoother long-running threads.
+- Snapshot bootstrap now fetches only the latest turn per thread at the SQL layer instead of
+  scanning all historical turns in memory.
+- Repository identity is now persisted into projection state, so snapshot generation no longer
+  shells out to Git on cache misses.
+- Orchestration ingress now uses bounded command and event queues instead of unbounded buffers.
+- Terminal subprocess polling now caps concurrent checker fan-out, reducing per-second process
+  pressure on large terminal sets.
+- Trace buffering now has an explicit in-memory cap, so repeated trace-write failures cannot
+  grow memory without bound.
+- Protected HTTP routes now use bearer-header auth, while WebSocket auth now uses a negotiated
+  subprotocol instead of carrying auth tokens in URLs.
+- Settings writes now reuse the hardened Windows-safe atomic write path already used by
+  keybindings.
+- Git status subscriptions now fan out per repository instead of waking all subscribers on
+  unrelated repo updates.
 - Compact work-log rendering with a detail popup for long tool/output entries.
 - Beans workflow management from the UI.
 - A post-agent quality gate that records format, lint, typecheck, and code-shape failures.
@@ -113,9 +130,28 @@ dialog without expanding the entire timeline.
 This fork has focused on keeping the UI responsive and predictable while provider
 sessions run, reconnect, or recover from partial streams. Recent fixes include:
 
+- Focus, online, pageshow, and visible-tab transitions now trigger debounced snapshot recovery,
+  so the UI resyncs after machine sleep, tab suspension, or missed live events.
 - Provider session updates now reconcile the latest turn when a runtime settles, so a
   completed provider session does not keep rendering as still working after refresh or
   restart.
+- Snapshot bootstrap now asks SQLite for only the latest turn per thread, which keeps
+  recovery cost tied to current thread state instead of total historical turn count.
+- Repository identity now comes from persisted projection data during snapshot reads, which
+  removes Git subprocesses from the steady-state recovery path.
+- Orchestration dispatch and live event fan-out now run through bounded buffers, so overload
+  backpressure is explicit instead of process-memory growth being implicit.
+- Terminal subprocess polling now caps concurrent checks, which avoids unbounded per-tick
+  polling fan-out when many terminals stay open.
+- Trace logging now enforces an in-memory backlog cap if file writes fail repeatedly,
+  preventing trace persistence failures from turning into an unbounded memory sink.
+- Protected HTTP assets and browser OTLP exports now authenticate with bearer headers, while
+  WebSocket auth uses a negotiated subprotocol and the browser strips `token` from the visible
+  page URL after bootstrap.
+- Settings persistence now shares the same Windows-safe atomic write path as keybindings,
+  reducing rename races during repeated writes.
+- Git status subscriptions now publish per normalized repository path, which avoids waking
+  unrelated repo subscribers on every refresh.
 - Settled provider states clear stale active-turn ids, while duplicate turn starts are
   still rejected when the session is actually running.
 - The chat composer ignores extra send attempts while a turn is running, which prevents

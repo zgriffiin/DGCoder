@@ -3,6 +3,7 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 
 import { isElectron } from "../env";
+import { resolveServerAuthHeaders } from "../lib/serverAuth";
 import { resolveServerUrl } from "../lib/utils";
 import { APP_VERSION } from "~/branding";
 
@@ -55,6 +56,7 @@ async function applyClientTracingConfig(config: ClientTracingConfig): Promise<vo
     protocol: window.location.protocol === "https:" ? "https" : "http",
     pathname: "/api/observability/v1/traces",
   });
+  const otlpHeaders = resolveServerAuthHeaders();
   const exportIntervalMs = Math.max(10, config.exportIntervalMs ?? DEFAULT_EXPORT_INTERVAL_MS);
   const nextConfigKey = `${otlpTracesUrl}|${exportIntervalMs}`;
 
@@ -82,6 +84,7 @@ async function applyClientTracingConfig(config: ClientTracingConfig): Promise<vo
       Scope.provide(scope)(
         OtlpTracer.make({
           url: otlpTracesUrl,
+          ...(otlpHeaders ? { headers: otlpHeaders } : {}),
           exportInterval: `${exportIntervalMs} millis`,
           resource: CLIENT_TRACING_RESOURCE,
         }),

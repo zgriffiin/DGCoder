@@ -451,6 +451,130 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("hydrates only the latest turn per thread from SQL", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_turns`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-latest-turn',
+          'Latest Turn Project',
+          '/tmp/latest-turn-project',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-03-04T00:00:00.000Z',
+          '2026-03-04T00:00:00.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-latest-turn',
+          'project-latest-turn',
+          'Latest Turn Thread',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access',
+          'default',
+          NULL,
+          NULL,
+          'turn-new',
+          '2026-03-04T00:00:00.000Z',
+          '2026-03-04T00:00:00.000Z',
+          NULL,
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_turns (
+          turn_id,
+          thread_id,
+          source_proposed_plan_thread_id,
+          source_proposed_plan_id,
+          assistant_message_id,
+          state,
+          requested_at,
+          started_at,
+          completed_at,
+          checkpoint_turn_count,
+          checkpoint_ref,
+          checkpoint_status,
+          checkpoint_files_json
+        )
+        VALUES
+          (
+            'turn-old',
+            'thread-latest-turn',
+            NULL,
+            NULL,
+            'message-old',
+            'completed',
+            '2026-03-04T00:00:01.000Z',
+            '2026-03-04T00:00:01.000Z',
+            '2026-03-04T00:00:02.000Z',
+            NULL,
+            NULL,
+            NULL,
+            '[]'
+          ),
+          (
+            'turn-new',
+            'thread-latest-turn',
+            NULL,
+            NULL,
+            'message-new',
+            'completed',
+            '2026-03-04T00:00:03.000Z',
+            '2026-03-04T00:00:03.000Z',
+            '2026-03-04T00:00:04.000Z',
+            NULL,
+            NULL,
+            NULL,
+            '[]'
+          )
+      `;
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      assert.equal(snapshot.threads[0]?.latestTurn?.turnId, TurnId.makeUnsafe("turn-new"));
+      assert.equal(
+        snapshot.threads[0]?.latestTurn?.assistantMessageId,
+        MessageId.makeUnsafe("message-new"),
+      );
+      assert.equal(snapshot.threads[0]?.latestTurn?.requestedAt, "2026-03-04T00:00:03.000Z");
+    }),
+  );
+
   it.effect(
     "reads targeted project, thread, and count queries without hydrating the full snapshot",
     () =>

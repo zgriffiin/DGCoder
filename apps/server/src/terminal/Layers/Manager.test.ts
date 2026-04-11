@@ -9,6 +9,7 @@ import {
   type TerminalRestartInput,
 } from "@t3tools/contracts";
 import {
+  Deferred,
   Duration,
   Effect,
   Encoding,
@@ -190,6 +191,7 @@ interface CreateManagerOptions {
   shellResolver?: () => string;
   subprocessChecker?: (terminalPid: number) => Effect.Effect<boolean>;
   subprocessPollIntervalMs?: number;
+  subprocessPollConcurrency?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
   ptyAdapter?: FakePtyAdapter;
@@ -227,6 +229,9 @@ const createManager = (
           : {}),
         ...(options.subprocessPollIntervalMs !== undefined
           ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
+          : {}),
+        ...(options.subprocessPollConcurrency !== undefined
+          ? { subprocessPollConcurrency: options.subprocessPollConcurrency }
           : {}),
         ...(options.processKillGraceMs !== undefined
           ? { processKillGraceMs: options.processKillGraceMs }
@@ -600,6 +605,38 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
         Effect.sync(() => checks > 0),
         "1200 millis",
       );
+    }),
+  );
+
+  it.effect("caps concurrent subprocess polling checks", () =>
+    Effect.gen(function* () {
+      let activeChecks = 0;
+      let maxActiveChecks = 0;
+      const gate = yield* Deferred.make<void>();
+
+      const { manager } = yield* createManager(5, {
+        subprocessChecker: () =>
+          Effect.gen(function* () {
+            activeChecks += 1;
+            maxActiveChecks = Math.max(maxActiveChecks, activeChecks);
+            yield* Deferred.await(gate);
+            activeChecks -= 1;
+            return false;
+          }),
+        subprocessPollIntervalMs: 20,
+        subprocessPollConcurrency: 2,
+      });
+
+      yield* manager.open(openInput({ threadId: "thread-1" }));
+      yield* manager.open(openInput({ threadId: "thread-2" }));
+      yield* manager.open(openInput({ threadId: "thread-3" }));
+
+      yield* waitFor(
+        Effect.sync(() => maxActiveChecks >= 2),
+        "1200 millis",
+      );
+      assert.equal(maxActiveChecks, 2);
+      yield* Deferred.succeed(gate, undefined).pipe(Effect.orDie);
     }),
   );
 

@@ -656,6 +656,15 @@ export function projectEvent(
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId,
                 };
+          const session =
+            thread.session === null
+              ? null
+              : normalizeSessionForProjection({
+                  ...thread.session,
+                  status: thread.session.status === "running" ? "ready" : thread.session.status,
+                  activeTurnId: null,
+                  updatedAt: event.occurredAt,
+                });
 
           return {
             ...nextBase,
@@ -664,6 +673,7 @@ export function projectEvent(
               messages,
               proposedPlans,
               activities,
+              session,
               latestTurn,
               updatedAt: event.occurredAt,
             }),

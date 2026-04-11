@@ -15,7 +15,8 @@ interface PendingActionState {
 interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
-  isRunning: boolean;
+  isInterruptible: boolean;
+  isInterruptPending: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -48,7 +49,8 @@ export const formatPendingPrimaryActionLabel = (input: {
 export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
-  isRunning,
+  isInterruptible,
+  isInterruptPending,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -106,17 +108,44 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning) {
+  if (isInterruptible) {
     return (
       <button
         type="button"
-        className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
+        className={cn(
+          "flex size-8 items-center justify-center rounded-full text-white transition-all duration-150 sm:h-8 sm:w-8",
+          isInterruptPending
+            ? "cursor-wait bg-rose-500"
+            : "cursor-pointer bg-rose-500/90 hover:scale-105 hover:bg-rose-500",
+        )}
         onClick={onInterrupt}
-        aria-label="Stop generation"
+        disabled={isInterruptPending}
+        aria-label={isInterruptPending ? "Stopping generation" : "Stop generation"}
       >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-          <rect x="2" y="2" width="8" height="8" rx="1.5" />
-        </svg>
+        {isInterruptPending ? (
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
+            className="animate-spin"
+            aria-hidden="true"
+          >
+            <circle
+              cx="7"
+              cy="7"
+              r="5.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeDasharray="20 12"
+            />
+          </svg>
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" rx="1.5" />
+          </svg>
+        )}
       </button>
     );
   }

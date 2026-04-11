@@ -7,8 +7,11 @@ import "@xterm/xterm/css/xterm.css";
 import "./index.css";
 
 import { isElectron } from "./env";
+import { stripServerAuthTokenFromCurrentUrl } from "./lib/serverAuth";
 import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
+
+stripServerAuthTokenFromCurrentUrl();
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();

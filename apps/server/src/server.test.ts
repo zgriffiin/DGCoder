@@ -44,6 +44,7 @@ import {
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import { vi } from "vitest";
+import { resolveWebSocketAuthProtocol } from "@t3tools/shared/webSocketAuthProtocol";
 
 import type { ServerConfigShape } from "./config.ts";
 import { deriveServerPaths, ServerConfig } from "./config.ts";
@@ -462,9 +463,11 @@ const buildAppUnderTest = (options?: {
     return config;
   });
 
-const wsRpcProtocolLayer = (wsUrl: string) =>
+const wsRpcProtocolLayer = (wsUrl: string, protocols?: ReadonlyArray<string>) =>
   RpcClient.layerProtocolSocket().pipe(
-    Layer.provide(NodeSocket.layerWebSocket(wsUrl)),
+    Layer.provide(
+      NodeSocket.layerWebSocket(wsUrl, protocols ? { protocols: [...protocols] } : undefined),
+    ),
     Layer.provide(RpcSerialization.layerJson),
   );
 
@@ -475,7 +478,14 @@ type WsRpcClient =
 const withWsRpcClient = <A, E, R>(
   wsUrl: string,
   f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
-) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl)));
+  options?: {
+    readonly protocols?: ReadonlyArray<string>;
+  },
+) =>
+  makeWsRpcClient.pipe(
+    Effect.flatMap(f),
+    Effect.provide(wsRpcProtocolLayer(wsUrl, options?.protocols)),
+  );
 
 const getHttpServerUrl = (pathname = "") =>
   Effect.gen(function* () {
@@ -643,13 +653,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.equal(unauthorizedOtlp.status, 401);
 
-      const authorizedFavicon = yield* HttpClient.get(
+      const queryTokenFavicon = yield* HttpClient.get(
         `/api/project-favicon?token=secret-token&cwd=${encodeURIComponent(projectDir)}`,
+      );
+      assert.equal(queryTokenFavicon.status, 401);
+
+      const authorizedFavicon = yield* HttpClient.get(
+        `/api/project-favicon?cwd=${encodeURIComponent(projectDir)}`,
+        {
+          headers: {
+            authorization: "Bearer secret-token",
+          },
+        },
       );
       assert.equal(authorizedFavicon.status, 200);
       assert.equal(yield* authorizedFavicon.text, "<svg>auth</svg>");
 
-      const authorizedOtlp = yield* HttpClient.post(
+      const queryTokenOtlp = yield* HttpClient.post(
         "/api/observability/v1/traces?token=secret-token",
         {
           headers: {
@@ -658,6 +678,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           body: HttpBody.text(JSON.stringify({ resourceSpans: [] }), "application/json"),
         },
       );
+      assert.equal(queryTokenOtlp.status, 401);
+
+      const authorizedOtlp = yield* HttpClient.post("/api/observability/v1/traces", {
+        headers: {
+          authorization: "Bearer secret-token",
+          "content-type": "application/json",
+        },
+        body: HttpBody.text(JSON.stringify({ resourceSpans: [] }), "application/json"),
+      });
       assert.equal(authorizedOtlp.status, 204);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -1076,19 +1105,63 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
       });
 
-      const wsUrl = yield* getWsServerUrl("/ws?token=secret-token");
+      const protocol = resolveWebSocketAuthProtocol("secret-token");
+      if (!protocol) {
+        throw new Error("Expected websocket auth protocol");
+      }
+
+      const wsUrl = yield* getWsServerUrl("/ws");
       const response = yield* Effect.scoped(
+        withWsRpcClient(
+          wsUrl,
+          (client) =>
+            client[WS_METHODS.projectsSearchEntries]({
+              cwd: workspaceDir,
+              query: "needle",
+              limit: 10,
+            }),
+          {
+            protocols: [protocol],
+          },
+        ),
+      );
+
+      assert.isAtLeast(response.entries.length, 1);
+      assert.equal(response.truncated, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects websocket query-token auth once subprotocol auth is available", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-ws-auth-query-token-rejected-",
+      });
+      yield* fs.writeFileString(
+        path.join(workspaceDir, "needle-file.ts"),
+        "export const needle = 1;",
+      );
+
+      yield* buildAppUnderTest({
+        config: {
+          authToken: "secret-token",
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws?token=secret-token");
+      const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           client[WS_METHODS.projectsSearchEntries]({
             cwd: workspaceDir,
             query: "needle",
             limit: 10,
           }),
-        ),
+        ).pipe(Effect.result),
       );
 
-      assert.isAtLeast(response.entries.length, 1);
-      assert.equal(response.truncated, false);
+      assertTrue(result._tag === "Failure");
+      assertInclude(String(result.failure), "SocketOpenError");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

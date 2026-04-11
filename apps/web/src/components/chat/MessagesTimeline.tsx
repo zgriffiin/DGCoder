@@ -61,6 +61,7 @@ import {
   formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
+import { useAuthenticatedAssetUrl } from "~/hooks/useAuthenticatedAssetUrl";
 import {
   Dialog,
   DialogDescription,
@@ -71,6 +72,49 @@ import {
 } from "../ui/dialog";
 
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
+
+function TimelineAttachmentPreview({
+  image,
+  userImages,
+  onImageExpand,
+  onTimelineImageLoad,
+}: {
+  readonly image: NonNullable<TimelineMessage["attachments"]>[number];
+  readonly userImages: NonNullable<TimelineMessage["attachments"]>;
+  readonly onImageExpand: (preview: ExpandedImagePreview) => void;
+  readonly onTimelineImageLoad: () => void;
+}) {
+  const authenticatedAsset = useAuthenticatedAssetUrl(image.previewUrl);
+
+  if (authenticatedAsset.status === "error" || !authenticatedAsset.src) {
+    return (
+      <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
+        {image.name}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="h-full w-full cursor-zoom-in"
+      aria-label={`Preview ${image.name}`}
+      onClick={() => {
+        const preview = buildExpandedImagePreview(userImages, image.id);
+        if (!preview) return;
+        onImageExpand(preview);
+      }}
+    >
+      <img
+        src={authenticatedAsset.src}
+        alt={image.name}
+        className="block h-auto max-h-[220px] w-full object-cover"
+        onLoad={onTimelineImageLoad}
+        onError={onTimelineImageLoad}
+      />
+    </button>
+  );
+}
 
 interface MessagesTimelineProps {
   hasMessages: boolean;
@@ -383,24 +427,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
                         >
                           {image.previewUrl ? (
-                            <button
-                              type="button"
-                              className="h-full w-full cursor-zoom-in"
-                              aria-label={`Preview ${image.name}`}
-                              onClick={() => {
-                                const preview = buildExpandedImagePreview(userImages, image.id);
-                                if (!preview) return;
-                                onImageExpand(preview);
-                              }}
-                            >
-                              <img
-                                src={image.previewUrl}
-                                alt={image.name}
-                                className="block h-auto max-h-[220px] w-full object-cover"
-                                onLoad={onTimelineImageLoad}
-                                onError={onTimelineImageLoad}
-                              />
-                            </button>
+                            <TimelineAttachmentPreview
+                              image={image}
+                              userImages={userImages}
+                              onImageExpand={onImageExpand}
+                              onTimelineImageLoad={onTimelineImageLoad}
+                            />
                           ) : (
                             <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
                               {image.name}

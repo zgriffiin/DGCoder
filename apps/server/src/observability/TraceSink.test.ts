@@ -149,4 +149,41 @@ describe("TraceSink", () => {
       }),
     ),
   );
+
+  it.effect("caps in-memory backlog and drops excess records once the cap is reached", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-trace-sink-"));
+        const tracePath = path.join(tempDir, "server.trace.ndjson");
+
+        try {
+          const alphaLine = `${JSON.stringify(makeRecord("alpha"))}\n`;
+          const sink = yield* makeTraceSink({
+            filePath: tracePath,
+            maxBytes: 1024,
+            maxFiles: 2,
+            batchWindowMs: 10_000,
+            maxBacklogBytes: Buffer.byteLength(alphaLine, "utf8"),
+          });
+
+          sink.push(makeRecord("alpha"));
+          sink.push(makeRecord("beta"));
+          yield* sink.close();
+
+          const lines = fs
+            .readFileSync(tracePath, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as TraceRecord);
+
+          assert.deepStrictEqual(
+            lines.map((line) => line.name),
+            ["alpha"],
+          );
+        } finally {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+      }),
+    ),
+  );
 });
