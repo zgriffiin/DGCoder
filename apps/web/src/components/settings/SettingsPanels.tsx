@@ -994,12 +994,7 @@ export function GeneralSettingsPanel() {
             <Select
               value={settings.responseStyle}
               onValueChange={(value) => {
-                if (
-                  value === "off" ||
-                  value === "lite" ||
-                  value === "full" ||
-                  value === "ultra"
-                ) {
+                if (value === "off" || value === "lite" || value === "full" || value === "ultra") {
                   updateSettings({ responseStyle: value });
                 }
               }}
