@@ -45,6 +45,8 @@ export type DefaultBranchConfirmableAction =
   | "commit_push"
   | "commit_push_pr";
 
+type GitStatusLocalReview = GitStatusResult["localReview"];
+
 export function buildGitActionProgressStages(input: {
   action: GitStackedAction;
   hasCustomCommitMessage: boolean;
@@ -304,6 +306,31 @@ export function requiresDefaultBranchConfirmation(
 
 export function isCommitDialogAction(action: GitStackedAction): action is CommitDialogAction {
   return action === "commit" || action === "commit_push" || action === "commit_push_pr";
+}
+
+export function isLocalReviewActionEnforced(
+  localReview: GitStatusLocalReview | null | undefined,
+  action: GitStackedAction,
+): boolean {
+  if (!localReview) {
+    return false;
+  }
+
+  return localReview.enforceOn.includes(action);
+}
+
+export function getLocalReviewActionBlockReason(
+  localReview: GitStatusLocalReview | null | undefined,
+  action: GitStackedAction,
+): string | null {
+  if (!localReview?.invalidReason) {
+    return null;
+  }
+  if (!isLocalReviewActionEnforced(localReview, action)) {
+    return null;
+  }
+
+  return `Local CodeRabbit review config is invalid: ${localReview.invalidReason}`;
 }
 
 export function resolveCommitDialogCopy(input: {

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "localReview": {
+    "tool": "coderabbit",
+    "command": "coderabbit",
+    "args": [
+      "review",
+      "--plain",
+      "--type",
+      "committed",
+      "--base",
+      "{{defaultBranch}}",
+      "-c",
+      "docs/coderabbit-review.md"
+    ],
+    "enforceOn": ["commit_push", "commit_push_pr", "create_pr"],
+    "timeoutMs": 300000
+  }
+}
