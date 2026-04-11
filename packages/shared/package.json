@@ -52,6 +52,10 @@
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
     },
+    "./changeProof": {
+      "types": "./src/changeProof.ts",
+      "import": "./src/changeProof.ts"
+    },
     "./amazonQ": {
       "types": "./src/amazonQ.ts",
       "import": "./src/amazonQ.ts"

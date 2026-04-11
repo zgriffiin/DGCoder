@@ -19,6 +19,7 @@ import {
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
 } from "@t3tools/shared/git";
+import { appendChangeProofToCommitBody, parseCommitChangeProof } from "@t3tools/shared/changeProof";
 
 import { GitManagerError } from "@t3tools/contracts";
 import {
@@ -32,10 +33,13 @@ import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { ProjectSetupScriptRunner } from "../../project/Services/ProjectSetupScriptRunner.ts";
 import { extractBranchNameFromRemoteRef } from "../remoteRefs.ts";
+import { runProcess } from "../../processRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
+const FUNCTIONAL_VALIDATION_TIMEOUT_MS = 10 * 60_000;
+const FUNCTIONAL_VALIDATION_OUTPUT_LIMIT_BYTES = 96_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
@@ -86,6 +90,16 @@ interface BranchHeadContext {
   headRepositoryNameWithOwner: string | null;
   headRepositoryOwnerLogin: string | null;
   isCrossRepository: boolean;
+}
+
+interface ChangeProofRequirements {
+  requireIntent: boolean;
+  requireFunctionalValidation: boolean;
+}
+
+interface CommitChangeProofInput {
+  readonly changeIntent?: string;
+  readonly validationCommands?: ReadonlyArray<string>;
 }
 
 function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
@@ -471,6 +485,90 @@ function parseCustomCommitMessage(raw: string): { subject: string; body: string 
     subject,
     body: rest.join("\n").trim(),
   };
+}
+
+function resolveChangeProofRequirements(input: {
+  enabled: boolean;
+  requireIntent: boolean;
+  requireFunctionalValidation: boolean;
+}): ChangeProofRequirements {
+  if (!input.enabled) {
+    return {
+      requireIntent: false,
+      requireFunctionalValidation: false,
+    };
+  }
+
+  return {
+    requireIntent: input.requireIntent,
+    requireFunctionalValidation: input.requireFunctionalValidation,
+  };
+}
+
+function buildMissingChangeProofDetail(
+  requirements: ChangeProofRequirements,
+  input: CommitChangeProofInput,
+): string | null {
+  const missing: string[] = [];
+  if (requirements.requireIntent && !input.changeIntent?.trim().length) {
+    missing.push("Intent");
+  }
+  if (
+    requirements.requireFunctionalValidation &&
+    (!input.validationCommands || input.validationCommands.length === 0)
+  ) {
+    missing.push("Validation commands");
+  }
+  return missing.length > 0 ? `Missing required change proof: ${missing.join(" and ")}.` : null;
+}
+
+function normalizeCommandOutput(stdout: string, stderr: string): string | undefined {
+  const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n\n").trim();
+  if (output.length === 0) {
+    return undefined;
+  }
+  return output.length > 4_000 ? `${output.slice(0, 4_000)}\n... [truncated]` : output;
+}
+
+async function runFunctionalValidationCommand(input: {
+  cwd: string;
+  commandLine: string;
+}): Promise<{ output?: string }> {
+  const result =
+    process.platform === "win32"
+      ? await runProcess(
+          "powershell.exe",
+          ["-NoLogo", "-NoProfile", "-Command", input.commandLine],
+          {
+            cwd: input.cwd,
+            timeoutMs: FUNCTIONAL_VALIDATION_TIMEOUT_MS,
+            maxBufferBytes: FUNCTIONAL_VALIDATION_OUTPUT_LIMIT_BYTES,
+            outputMode: "truncate",
+            allowNonZeroExit: true,
+          },
+        )
+      : await runProcess("/bin/sh", ["-lc", input.commandLine], {
+          cwd: input.cwd,
+          timeoutMs: FUNCTIONAL_VALIDATION_TIMEOUT_MS,
+          maxBufferBytes: FUNCTIONAL_VALIDATION_OUTPUT_LIMIT_BYTES,
+          outputMode: "truncate",
+          allowNonZeroExit: true,
+        });
+
+  if (!result.timedOut && result.code === 0) {
+    const output = normalizeCommandOutput(result.stdout, result.stderr);
+    return output ? { output } : {};
+  }
+
+  const output = normalizeCommandOutput(result.stdout, result.stderr);
+  const timedOutDetail = result.timedOut
+    ? `timed out after ${FUNCTIONAL_VALIDATION_TIMEOUT_MS / 1_000}s`
+    : `failed with exit code ${result.code ?? "null"}`;
+  throw new Error(
+    output
+      ? `Validation command "${input.commandLine}" ${timedOutDetail}.\n\n${output}`
+      : `Validation command "${input.commandLine}" ${timedOutDetail}.`,
+  );
 }
 
 function appendUnique(values: string[], next: string | null | undefined): void {
@@ -1141,11 +1239,106 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     },
   );
 
+  const runFunctionalValidationCommands = Effect.fn("runFunctionalValidationCommands")(function* (
+    cwd: string,
+    commands: ReadonlyArray<string>,
+    emit: GitActionProgressEmitter,
+  ) {
+    for (const [index, commandLine] of commands.entries()) {
+      yield* emit({
+        kind: "phase_started",
+        phase: "commit",
+        label:
+          commands.length === 1
+            ? "Running validation..."
+            : `Running validation (${index + 1}/${commands.length})...`,
+      });
+
+      yield* Effect.tryPromise({
+        try: () => runFunctionalValidationCommand({ cwd, commandLine }),
+        catch: (cause) =>
+          gitManagerError(
+            "runFunctionalValidationCommands",
+            cause instanceof Error ? cause.message : `Validation command "${commandLine}" failed.`,
+            cause,
+          ),
+      });
+    }
+  });
+
+  const assertOutgoingCommitProof = Effect.fn("assertOutgoingCommitProof")(function* (
+    cwd: string,
+    requirements: ChangeProofRequirements,
+    currentStatus: GitStatusDetails,
+  ) {
+    if (!requirements.requireIntent && !requirements.requireFunctionalValidation) {
+      return;
+    }
+
+    const revisionArgs =
+      currentStatus.hasUpstream && currentStatus.upstreamRef
+        ? ["rev-list", `${currentStatus.upstreamRef}..HEAD`]
+        : ["rev-list", "HEAD", "--not", "--remotes"];
+    const revisionResult = yield* gitCore.execute({
+      operation: "GitManager.assertOutgoingCommitProof.revList",
+      cwd,
+      args: revisionArgs,
+      allowNonZeroExit: true,
+    });
+    const commitShas = revisionResult.stdout
+      .split(/\r?\n/g)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (commitShas.length === 0) {
+      return;
+    }
+
+    const failures: string[] = [];
+    for (const commitSha of commitShas) {
+      const commitMessage = yield* gitCore
+        .execute({
+          operation: "GitManager.assertOutgoingCommitProof.readCommitMessage",
+          cwd,
+          args: ["log", "-1", "--format=%B", commitSha],
+        })
+        .pipe(Effect.map((result) => result.stdout.trim()));
+      const parsed = parseCommitChangeProof(commitMessage);
+      const missing: string[] = [];
+      if (requirements.requireIntent && !parsed.intent) {
+        missing.push("intent");
+      }
+      if (requirements.requireFunctionalValidation && parsed.validationCommands.length === 0) {
+        missing.push("validation");
+      }
+      if (missing.length === 0) {
+        continue;
+      }
+
+      const summary = parsed.subject.length > 0 ? parsed.subject : "Untitled commit";
+      failures.push(
+        `${commitSha.slice(0, SHORT_SHA_LENGTH)} "${summary}" is missing ${missing.join(" and ")}.`,
+      );
+    }
+
+    if (failures.length > 0) {
+      return yield* gitManagerError(
+        "assertOutgoingCommitProof",
+        [
+          "Push blocked because outgoing commits are missing required change proof.",
+          ...failures,
+          "Amend or recommit with Intent and Validation before pushing.",
+        ].join("\n"),
+      );
+    }
+  });
+
   const runCommitStep = Effect.fn("runCommitStep")(function* (
     modelSelection: ModelSelection,
     cwd: string,
     action: "commit" | "commit_push" | "commit_push_pr",
     branch: string | null,
+    changeProofRequirements: ChangeProofRequirements,
+    changeProofInput: CommitChangeProofInput,
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
@@ -1182,6 +1375,18 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     }
     if (!suggestion) {
       return { status: "skipped_no_changes" as const };
+    }
+
+    const missingChangeProofDetail = buildMissingChangeProofDetail(
+      changeProofRequirements,
+      changeProofInput,
+    );
+    if (missingChangeProofDetail) {
+      return yield* gitManagerError("runCommitStep", missingChangeProofDetail);
+    }
+
+    if (changeProofInput.validationCommands && changeProofInput.validationCommands.length > 0) {
+      yield* runFunctionalValidationCommands(cwd, changeProofInput.validationCommands, emit);
     }
 
     yield* emit({
@@ -1234,7 +1439,18 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
             },
           }
         : null;
-    const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
+    const shouldAppendChangeProof =
+      (changeProofInput.changeIntent?.trim().length ?? 0) > 0 ||
+      (changeProofInput.validationCommands?.length ?? 0) > 0 ||
+      changeProofRequirements.requireIntent ||
+      changeProofRequirements.requireFunctionalValidation;
+    const commitBody = shouldAppendChangeProof
+      ? appendChangeProofToCommitBody(suggestion.body, {
+          intent: changeProofInput.changeIntent ?? "",
+          validationCommands: changeProofInput.validationCommands ?? [],
+        })
+      : suggestion.body;
+    const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, commitBody, {
       timeoutMs: COMMIT_TIMEOUT_MS,
       ...(commitProgress ? { progress: commitProgress } : {}),
     });
@@ -1658,12 +1874,13 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
         let commitMessageForStep = input.commitMessage;
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
-        const modelSelection = yield* serverSettingsService.getSettings.pipe(
-          Effect.map((settings) => settings.textGenerationModelSelection),
+        const settings = yield* serverSettingsService.getSettings.pipe(
           Effect.mapError((cause) =>
             gitManagerError("runStackedAction", "Failed to get server settings.", cause),
           ),
         );
+        const modelSelection = settings.textGenerationModelSelection;
+        const changeProofRequirements = resolveChangeProofRequirements(settings.qualityGate);
 
         if (input.featureBranch) {
           yield* Ref.set(currentPhase, Option.some("branch"));
@@ -1697,6 +1914,13 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
                   input.cwd,
                   commitAction,
                   currentBranch,
+                  changeProofRequirements,
+                  {
+                    ...(input.changeIntent ? { changeIntent: input.changeIntent } : {}),
+                    ...(input.validationCommands
+                      ? { validationCommands: input.validationCommands }
+                      : {}),
+                  },
                   commitMessageForStep,
                   preResolvedCommitSuggestion,
                   input.filePaths,
@@ -1706,6 +1930,13 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
               ),
             )
           : { status: "skipped_not_requested" as const };
+
+        const statusBeforePush =
+          wantsPush || wantsPr ? yield* gitCore.statusDetails(input.cwd) : initialStatus;
+
+        if (wantsPush || wantsPr) {
+          yield* assertOutgoingCommitProof(input.cwd, changeProofRequirements, statusBeforePush);
+        }
 
         const push = wantsPush
           ? yield* progress

@@ -5,6 +5,7 @@ import type {
   GitStackedAction,
   GitStatusResult,
 } from "@t3tools/contracts";
+import { normalizeValidationCommands } from "@t3tools/shared/changeProof";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon, CloudUploadIcon, GitCommitIcon, InfoIcon } from "lucide-react";
@@ -12,11 +13,14 @@ import { GitHubIcon } from "./Icons";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  type CommitDialogAction,
+  isCommitDialogAction,
   type GitActionIconName,
   type GitActionMenuItem,
   type GitQuickAction,
   type DefaultBranchConfirmableAction,
   requiresDefaultBranchConfirmation,
+  resolveCommitDialogCopy,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
@@ -50,6 +54,7 @@ import { refreshGitStatus, useGitStatus } from "~/lib/gitStatusState";
 import { newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readEnvironmentApi } from "~/environmentApi";
+import { useSettings } from "~/hooks/useSettings";
 import { readLocalApi } from "~/localApi";
 import { useStore } from "~/store";
 import { createThreadSelectorByRef } from "~/storeSelectors";
@@ -64,6 +69,8 @@ interface PendingDefaultBranchAction {
   branchName: string;
   includesCommit: boolean;
   commitMessage?: string;
+  changeIntent?: string;
+  validationCommands?: string[];
   onConfirmed?: () => void;
   filePaths?: string[];
 }
@@ -85,6 +92,8 @@ interface ActiveGitActionProgress {
 interface RunGitActionWithToastInput {
   action: GitStackedAction;
   commitMessage?: string;
+  changeIntent?: string;
+  validationCommands?: string[];
   onConfirmed?: () => void;
   skipDefaultBranchPrompt?: boolean;
   statusOverride?: GitStatusResult | null;
@@ -183,10 +192,6 @@ function getMenuActionDisabledReason({
   return "Create PR is currently unavailable.";
 }
 
-const COMMIT_DIALOG_TITLE = "Commit changes";
-const COMMIT_DIALOG_DESCRIPTION =
-  "Review and confirm your commit. Leave the message blank to auto-generate one.";
-
 function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
   if (icon === "commit") return <GitCommitIcon />;
   if (icon === "push") return <CloudUploadIcon />;
@@ -223,7 +228,10 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
   const setThreadBranch = useStore((store) => store.setThreadBranch);
   const queryClient = useQueryClient();
   const [isCommitDialogOpen, setIsCommitDialogOpen] = useState(false);
+  const [commitDialogAction, setCommitDialogAction] = useState<CommitDialogAction>("commit");
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
+  const [dialogChangeIntent, setDialogChangeIntent] = useState("");
+  const [dialogValidationCommandsText, setDialogValidationCommandsText] = useState("");
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
@@ -290,11 +298,31 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
   const isRepo = gitStatus?.isRepo ?? true;
   const hasOriginRemote = gitStatus?.hasOriginRemote ?? false;
   const gitStatusForActions = gitStatus;
+  const qualityGateSettings = useSettings((settings) => settings.qualityGate);
+  const requireIntent = qualityGateSettings.enabled && qualityGateSettings.requireIntent;
+  const requireFunctionalValidation =
+    qualityGateSettings.enabled && qualityGateSettings.requireFunctionalValidation;
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
+  const dialogValidationCommands = useMemo(
+    () => normalizeValidationCommands(dialogValidationCommandsText),
+    [dialogValidationCommandsText],
+  );
+  const isIntentMissing = requireIntent && dialogChangeIntent.trim().length === 0;
+  const isValidationMissing = requireFunctionalValidation && dialogValidationCommands.length === 0;
+  const isCommitDialogSubmitDisabled = noneSelected || isIntentMissing || isValidationMissing;
+  const commitDialogCopy = useMemo(
+    () =>
+      resolveCommitDialogCopy({
+        action: commitDialogAction,
+        requireIntent,
+        requireFunctionalValidation,
+      }),
+    [commitDialogAction, requireFunctionalValidation, requireIntent],
+  );
 
   const initMutation = useMutation(
     gitInitMutationOptions({ environmentId: activeEnvironmentId, cwd: gitCwd, queryClient }),
@@ -445,6 +473,8 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
     async ({
       action,
       commitMessage,
+      changeIntent,
+      validationCommands,
       onConfirmed,
       skipDefaultBranchPrompt = false,
       statusOverride,
@@ -478,6 +508,8 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
           branchName: actionBranch,
           includesCommit,
           ...(commitMessage ? { commitMessage } : {}),
+          ...(changeIntent ? { changeIntent } : {}),
+          ...(validationCommands && validationCommands.length > 0 ? { validationCommands } : {}),
           ...(onConfirmed ? { onConfirmed } : {}),
           ...(filePaths ? { filePaths } : {}),
         });
@@ -488,6 +520,7 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
       const progressStages = buildGitActionProgressStages({
         action,
         hasCustomCommitMessage: !!commitMessage?.trim(),
+        hasFunctionalValidation: (validationCommands?.length ?? 0) > 0,
         hasWorkingTreeChanges: !!actionStatus?.hasWorkingTreeChanges,
         featureBranch,
         shouldPushBeforePr:
@@ -588,6 +621,8 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
         actionId,
         action,
         ...(commitMessage ? { commitMessage } : {}),
+        ...(changeIntent ? { changeIntent } : {}),
+        ...(validationCommands && validationCommands.length > 0 ? { validationCommands } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
         onProgress: applyProgressEvent,
@@ -661,11 +696,14 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
 
   const continuePendingDefaultBranchAction = () => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitMessage, changeIntent, validationCommands, onConfirmed, filePaths } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
       ...(commitMessage ? { commitMessage } : {}),
+      ...(changeIntent ? { changeIntent } : {}),
+      ...(validationCommands ? { validationCommands } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
       skipDefaultBranchPrompt: true,
@@ -674,11 +712,14 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
 
   const checkoutFeatureBranchAndContinuePendingAction = () => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitMessage, changeIntent, validationCommands, onConfirmed, filePaths } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
       ...(commitMessage ? { commitMessage } : {}),
+      ...(changeIntent ? { changeIntent } : {}),
+      ...(validationCommands ? { validationCommands } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
       featureBranch: true,
@@ -689,15 +730,21 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
   const runDialogActionOnNewBranch = () => {
     if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
+    const changeIntent = dialogChangeIntent.trim();
+    const validationCommands = [...dialogValidationCommands];
 
     setIsCommitDialogOpen(false);
     setDialogCommitMessage("");
+    setDialogChangeIntent("");
+    setDialogValidationCommandsText("");
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
 
     void runGitActionWithToast({
-      action: "commit",
+      action: commitDialogAction,
       ...(commitMessage ? { commitMessage } : {}),
+      ...(changeIntent ? { changeIntent } : {}),
+      ...(validationCommands.length > 0 ? { validationCommands } : {}),
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
       featureBranch: true,
       skipDefaultBranchPrompt: true,
@@ -740,6 +787,16 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
       return;
     }
     if (quickAction.action) {
+      if (isCommitDialogAction(quickAction.action)) {
+        setCommitDialogAction(quickAction.action);
+        setDialogCommitMessage("");
+        setDialogChangeIntent("");
+        setDialogValidationCommandsText("");
+        setExcludedFiles(new Set());
+        setIsEditingFiles(false);
+        setIsCommitDialogOpen(true);
+        return;
+      }
       void runGitActionWithToast({ action: quickAction.action });
     }
   };
@@ -758,6 +815,10 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
       void runGitActionWithToast({ action: "create_pr" });
       return;
     }
+    setCommitDialogAction("commit");
+    setDialogCommitMessage("");
+    setDialogChangeIntent("");
+    setDialogValidationCommandsText("");
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
     setIsCommitDialogOpen(true);
@@ -766,13 +827,19 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
   const runDialogAction = () => {
     if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
+    const changeIntent = dialogChangeIntent.trim();
+    const validationCommands = [...dialogValidationCommands];
     setIsCommitDialogOpen(false);
     setDialogCommitMessage("");
+    setDialogChangeIntent("");
+    setDialogValidationCommandsText("");
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
     void runGitActionWithToast({
-      action: "commit",
+      action: commitDialogAction,
       ...(commitMessage ? { commitMessage } : {}),
+      ...(changeIntent ? { changeIntent } : {}),
+      ...(validationCommands.length > 0 ? { validationCommands } : {}),
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
     });
   };
@@ -937,6 +1004,8 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
           if (!open) {
             setIsCommitDialogOpen(false);
             setDialogCommitMessage("");
+            setDialogChangeIntent("");
+            setDialogValidationCommandsText("");
             setExcludedFiles(new Set());
             setIsEditingFiles(false);
           }
@@ -944,8 +1013,8 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
       >
         <DialogPopup>
           <DialogHeader>
-            <DialogTitle>{COMMIT_DIALOG_TITLE}</DialogTitle>
-            <DialogDescription>{COMMIT_DIALOG_DESCRIPTION}</DialogDescription>
+            <DialogTitle>{commitDialogCopy.title}</DialogTitle>
+            <DialogDescription>{commitDialogCopy.description}</DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <div className="space-y-3 rounded-lg border border-input bg-muted/40 p-3 text-xs">
@@ -1061,6 +1130,43 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
               </div>
             </div>
             <div className="space-y-1">
+              <p className="text-xs font-medium">Intent{requireIntent ? " (required)" : ""}</p>
+              <Textarea
+                value={dialogChangeIntent}
+                onChange={(event) => setDialogChangeIntent(event.target.value)}
+                placeholder="Explain why this change exists"
+                size="sm"
+              />
+              {isIntentMissing ? (
+                <p className="text-xs text-destructive">Intent is required before committing.</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  This is stored with the commit so the rationale survives the push.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs font-medium">
+                Functional validation commands{requireFunctionalValidation ? " (required)" : ""}
+              </p>
+              <Textarea
+                value={dialogValidationCommandsText}
+                onChange={(event) => setDialogValidationCommandsText(event.target.value)}
+                placeholder={"bun run test apps/server\nbun run typecheck"}
+                size="sm"
+              />
+              {isValidationMissing ? (
+                <p className="text-xs text-destructive">
+                  Add at least one validation command. These commands run before the commit is
+                  created.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Enter one command per line. Use commands that prove the intended behavior.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1">
               <p className="text-xs font-medium">Commit message (optional)</p>
               <Textarea
                 value={dialogCommitMessage}
@@ -1077,6 +1183,8 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
               onClick={() => {
                 setIsCommitDialogOpen(false);
                 setDialogCommitMessage("");
+                setDialogChangeIntent("");
+                setDialogValidationCommandsText("");
                 setExcludedFiles(new Set());
                 setIsEditingFiles(false);
               }}
@@ -1086,13 +1194,13 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
             <Button
               variant="outline"
               size="sm"
-              disabled={noneSelected}
+              disabled={isCommitDialogSubmitDisabled}
               onClick={runDialogActionOnNewBranch}
             >
-              Commit on new branch
+              {commitDialogCopy.submitOnNewBranchLabel}
             </Button>
-            <Button size="sm" disabled={noneSelected} onClick={runDialogAction}>
-              Commit
+            <Button size="sm" disabled={isCommitDialogSubmitDisabled} onClick={runDialogAction}>
+              {commitDialogCopy.submitLabel}
             </Button>
           </DialogFooter>
         </DialogPopup>

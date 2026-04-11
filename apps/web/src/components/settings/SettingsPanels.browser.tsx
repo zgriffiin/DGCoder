@@ -143,6 +143,19 @@ describe("GeneralSettingsPanel observability", () => {
         },
       }),
     );
+
+    await page.getByRole("switch", { name: "Intent" }).click();
+
+    await vi.waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        qualityGate: {
+          ...DEFAULT_SERVER_SETTINGS.qualityGate,
+          lint: false,
+          requireIntent: false,
+          maxFileLines: 250,
+        },
+      }),
+    );
   });
 
   it("persists Amazon Q IAM Identity Center SSO settings", async () => {

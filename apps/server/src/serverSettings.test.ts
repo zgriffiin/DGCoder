@@ -130,6 +130,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         format: false,
         lint: false,
         typecheck: true,
+        requireIntent: true,
+        requireFunctionalValidation: true,
         maxFileLines: 300,
         maxFunctionLines: null,
         maxCyclomaticComplexity: 15,

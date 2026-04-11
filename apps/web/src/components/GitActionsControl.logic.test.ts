@@ -3,7 +3,9 @@ import { assert, describe, it } from "vitest";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  isCommitDialogAction,
   requiresDefaultBranchConfirmation,
+  resolveCommitDialogCopy,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
@@ -814,6 +816,32 @@ describe("requiresDefaultBranchConfirmation", () => {
   });
 });
 
+describe("resolveCommitDialogCopy", () => {
+  it("builds commit-and-push dialog copy with proof requirements", () => {
+    assert.deepEqual(
+      resolveCommitDialogCopy({
+        action: "commit_push",
+        requireIntent: true,
+        requireFunctionalValidation: true,
+      }),
+      {
+        title: "Commit & push",
+        description:
+          "Record the intent and the functional validation commands before continuing. Leave the commit message blank to auto-generate one.",
+        submitLabel: "Commit & push",
+        submitOnNewBranchLabel: "Run on new branch",
+      },
+    );
+  });
+});
+
+describe("isCommitDialogAction", () => {
+  it("returns true only for commit-related actions", () => {
+    assert.isTrue(isCommitDialogAction("commit_push_pr"));
+    assert.isFalse(isCommitDialogAction("push"));
+  });
+});
+
 describe("resolveDefaultBranchActionDialogCopy", () => {
   it("uses push-only copy when pushing without a commit", () => {
     const copy = resolveDefaultBranchActionDialogCopy({
@@ -866,6 +894,7 @@ describe("buildGitActionProgressStages", () => {
     const stages = buildGitActionProgressStages({
       action: "push",
       hasCustomCommitMessage: false,
+      hasFunctionalValidation: false,
       hasWorkingTreeChanges: false,
       pushTarget: "origin/feature/test",
     });
@@ -876,6 +905,7 @@ describe("buildGitActionProgressStages", () => {
     const stages = buildGitActionProgressStages({
       action: "create_pr",
       hasCustomCommitMessage: false,
+      hasFunctionalValidation: false,
       hasWorkingTreeChanges: false,
       pushTarget: "origin/feature/test",
       shouldPushBeforePr: true,
@@ -892,6 +922,7 @@ describe("buildGitActionProgressStages", () => {
     const stages = buildGitActionProgressStages({
       action: "create_pr",
       hasCustomCommitMessage: false,
+      hasFunctionalValidation: false,
       hasWorkingTreeChanges: false,
       shouldPushBeforePr: false,
     });
@@ -906,6 +937,7 @@ describe("buildGitActionProgressStages", () => {
     const stages = buildGitActionProgressStages({
       action: "commit_push",
       hasCustomCommitMessage: false,
+      hasFunctionalValidation: false,
       hasWorkingTreeChanges: true,
       pushTarget: "origin/feature/test",
     });
@@ -920,10 +952,12 @@ describe("buildGitActionProgressStages", () => {
     const stages = buildGitActionProgressStages({
       action: "commit_push_pr",
       hasCustomCommitMessage: true,
+      hasFunctionalValidation: true,
       hasWorkingTreeChanges: true,
       pushTarget: "origin/feature/test",
     });
     assert.deepEqual(stages, [
+      "Running validation...",
       "Committing...",
       "Pushing to origin/feature/test...",
       "Preparing PR...",
