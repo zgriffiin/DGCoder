@@ -921,6 +921,15 @@ async function waitForSendButton(): Promise<HTMLButtonElement> {
   );
 }
 
+async function waitForStopButton(
+  ariaLabel: "Stop generation" | "Stopping generation" = "Stop generation",
+): Promise<HTMLButtonElement> {
+  return waitForElement(
+    () => document.querySelector<HTMLButtonElement>(`button[aria-label="${ariaLabel}"]`),
+    `Unable to find ${ariaLabel} button.`,
+  );
+}
+
 function findComposerProviderModelPicker(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>('[data-chat-provider-model-picker="true"]');
 }
@@ -2276,7 +2285,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("shows the send state once bootstrap dispatch is in flight", async () => {
+  it("shows the immediate stop affordance once bootstrap dispatch is in flight", async () => {
     useTerminalStateStore.setState({
       terminalStateByThreadKey: {},
     });
@@ -2337,13 +2346,107 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(
             wsRequests.some((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
           ).toBe(true);
-          expect(document.querySelector('button[aria-label="Sending"]')).toBeTruthy();
-          expect(document.querySelector('button[aria-label="Preparing worktree"]')).toBeNull();
+          expect(document.querySelector('button[aria-label="Stop generation"]')).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },
       );
     } finally {
       resolveDispatch({ sequence: fixture.snapshot.snapshotSequence + 1 });
+      await mounted.cleanup();
+    }
+  });
+
+  it("queues an interrupt immediately when stop is clicked before turn start resolves", async () => {
+    useTerminalStateStore.setState({
+      terminalStateByThreadKey: {},
+    });
+    useComposerDraftStore.setState({
+      draftThreadsByThreadKey: {
+        [THREAD_KEY]: {
+          threadId: THREAD_ID,
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+          logicalProjectKey: PROJECT_DRAFT_KEY,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      logicalProjectDraftThreadKeyByLogicalProjectKey: {
+        [PROJECT_DRAFT_KEY]: THREAD_KEY,
+      },
+    });
+
+    let resolveTurnStart!: (value: { sequence: number }) => void;
+    const turnStartPromise = new Promise<{ sequence: number }>((resolve) => {
+      resolveTurnStart = resolve;
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      resolveRpc: (body) => {
+        if (
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          body.type === "thread.turn.start"
+        ) {
+          return turnStartPromise;
+        }
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "Interrupt right away");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      const stopButton = await waitForStopButton();
+      stopButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('button[aria-label="Stopping generation"]')).toBeTruthy();
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.turn.interrupt",
+            ),
+          ).toBe(false);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      resolveTurnStart({ sequence: fixture.snapshot.snapshotSequence + 1 });
+
+      await vi.waitFor(
+        () => {
+          const interruptRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.interrupt",
+          );
+          expect(interruptRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "thread.turn.interrupt",
+            threadId: THREAD_ID,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      resolveTurnStart({ sequence: fixture.snapshot.snapshotSequence + 1 });
       await mounted.cleanup();
     }
   });

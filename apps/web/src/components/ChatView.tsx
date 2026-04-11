@@ -816,6 +816,8 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
+  const localDispatchTargetThreadIdRef = useRef<ThreadId | null>(null);
+  const queuedInterruptThreadIdRef = useRef<ThreadId | null>(null);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
@@ -1261,6 +1263,7 @@ export default function ChatView(props: ChatViewProps) {
     threadError: activeThread?.error,
   });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  const [isInterruptPending, setIsInterruptPending] = useState(false);
   const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
@@ -1763,6 +1766,59 @@ export default function ChatView(props: ChatViewProps) {
       });
     },
     [draftId, routeThreadRef, serverThread, setStoreThreadError],
+  );
+  const clearQueuedInterrupt = useCallback(() => {
+    queuedInterruptThreadIdRef.current = null;
+    setIsInterruptPending(false);
+  }, []);
+  const beginInterruptibleDispatch = useCallback(
+    (threadId: ThreadId) => {
+      localDispatchTargetThreadIdRef.current = threadId;
+      clearQueuedInterrupt();
+    },
+    [clearQueuedInterrupt],
+  );
+  const finishInterruptibleDispatch = useCallback(() => {
+    localDispatchTargetThreadIdRef.current = null;
+    clearQueuedInterrupt();
+  }, [clearQueuedInterrupt]);
+  const dispatchTurnInterrupt = useCallback(
+    async (threadId: ThreadId) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        return false;
+      }
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.interrupt",
+          commandId: newCommandId(),
+          threadId,
+          createdAt: new Date().toISOString(),
+        });
+        return true;
+      } catch (err) {
+        setThreadError(
+          threadId,
+          err instanceof Error ? err.message : "Failed to interrupt current turn.",
+        );
+        return false;
+      }
+    },
+    [environmentId, setThreadError],
+  );
+  const flushQueuedInterrupt = useCallback(
+    async (threadId: ThreadId) => {
+      if (queuedInterruptThreadIdRef.current !== threadId) {
+        return false;
+      }
+      queuedInterruptThreadIdRef.current = null;
+      try {
+        return await dispatchTurnInterrupt(threadId);
+      } finally {
+        setIsInterruptPending(false);
+      }
+    },
+    [dispatchTurnInterrupt],
   );
 
   const focusComposer = useCallback(() => {
@@ -3118,6 +3174,7 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     sendInFlightRef.current = true;
+    beginInterruptibleDispatch(threadIdForSend);
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
     const composerImagesSnapshot = [...composerImages];
@@ -3283,6 +3340,7 @@ export default function ChatView(props: ChatViewProps) {
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
+      await flushQueuedInterrupt(threadIdForSend);
     })().catch(async (err: unknown) => {
       if (
         !turnStartSucceeded &&
@@ -3314,17 +3372,23 @@ export default function ChatView(props: ChatViewProps) {
     if (!turnStartSucceeded) {
       resetLocalDispatch();
     }
+    finishInterruptibleDispatch();
   };
 
   const onInterrupt = async () => {
-    const api = readEnvironmentApi(environmentId);
-    if (!api || !activeThread) return;
-    await api.orchestration.dispatchCommand({
-      type: "thread.turn.interrupt",
-      commandId: newCommandId(),
-      threadId: activeThread.id,
-      createdAt: new Date().toISOString(),
-    });
+    if (!activeThread) return;
+    const interruptThreadId = localDispatchTargetThreadIdRef.current ?? activeThread.id;
+    if (sendInFlightRef.current || isSendBusy) {
+      queuedInterruptThreadIdRef.current = interruptThreadId;
+      setIsInterruptPending(true);
+      return;
+    }
+    setIsInterruptPending(true);
+    try {
+      await dispatchTurnInterrupt(interruptThreadId);
+    } finally {
+      setIsInterruptPending(false);
+    }
   };
 
   const onRespondToApproval = useCallback(
@@ -3523,6 +3587,7 @@ export default function ChatView(props: ChatViewProps) {
       });
 
       sendInFlightRef.current = true;
+      beginInterruptibleDispatch(threadIdForSend);
       beginLocalDispatch({ preparingWorktree: false });
       setThreadError(threadIdForSend, null);
       setOptimisticUserMessages((existing) => [
@@ -3578,6 +3643,7 @@ export default function ChatView(props: ChatViewProps) {
             : {}),
           createdAt: messageCreatedAt,
         });
+        await flushQueuedInterrupt(threadIdForSend);
         // Optimistically open the plan sidebar when implementing (not refining).
         // "default" mode here means the agent is executing the plan, which produces
         // step-tracking activities that the sidebar will display.
@@ -3596,13 +3662,19 @@ export default function ChatView(props: ChatViewProps) {
         );
         sendInFlightRef.current = false;
         resetLocalDispatch();
+        finishInterruptibleDispatch();
+        return;
       }
+      finishInterruptibleDispatch();
     },
     [
       activeThread,
       activeProposedPlan,
+      beginInterruptibleDispatch,
       beginLocalDispatch,
+      finishInterruptibleDispatch,
       forceStickToBottom,
+      flushQueuedInterrupt,
       isConnecting,
       isSendBusy,
       isServerThread,
@@ -3650,10 +3722,12 @@ export default function ChatView(props: ChatViewProps) {
     const nextThreadModelSelection: ModelSelection = selectedModelSelection;
 
     sendInFlightRef.current = true;
+    beginInterruptibleDispatch(nextThreadId);
     beginLocalDispatch({ preparingWorktree: false });
     const finish = () => {
       sendInFlightRef.current = false;
       resetLocalDispatch();
+      finishInterruptibleDispatch();
     };
 
     await api.orchestration
@@ -3692,6 +3766,7 @@ export default function ChatView(props: ChatViewProps) {
           createdAt,
         });
       })
+      .then(() => flushQueuedInterrupt(nextThreadId))
       .then(() => {
         return waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, nextThreadId));
       })
@@ -3726,7 +3801,10 @@ export default function ChatView(props: ChatViewProps) {
     activeProject,
     activeProposedPlan,
     activeThread,
+    beginInterruptibleDispatch,
     beginLocalDispatch,
+    finishInterruptibleDispatch,
+    flushQueuedInterrupt,
     isConnecting,
     isSendBusy,
     isServerThread,
@@ -4607,7 +4685,8 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                               : null
                           }
-                          isRunning={phase === "running"}
+                          isInterruptible={phase === "running" || isSendBusy}
+                          isInterruptPending={isInterruptPending}
                           showPlanFollowUpPrompt={
                             pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                           }

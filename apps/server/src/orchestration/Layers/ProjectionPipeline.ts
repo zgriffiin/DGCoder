@@ -379,7 +379,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       "applyProjectsProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "project.created":
+        case "project.created": {
           const createdRepositoryIdentity = yield* repositoryIdentityResolver.resolve(
             event.payload.workspaceRoot,
           );
@@ -395,6 +395,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             deletedAt: null,
           });
           return;
+        }
 
         case "project.meta-updated": {
           const existingRow = yield* projectionProjectRepository.getById({
@@ -405,7 +406,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           const nextWorkspaceRoot = event.payload.workspaceRoot ?? existingRow.value.workspaceRoot;
           const nextRepositoryIdentity =
-            event.payload.workspaceRoot !== undefined
+            event.payload.workspaceRoot !== undefined ||
+            existingRow.value.repositoryIdentity === null
               ? yield* repositoryIdentityResolver.resolve(nextWorkspaceRoot)
               : existingRow.value.repositoryIdentity;
           yield* projectionProjectRepository.upsert({
@@ -813,18 +815,38 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const applyThreadSessionsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadSessionsProjection",
     )(function* (event, _attachmentSideEffects) {
-      if (event.type !== "thread.session-set") {
-        return;
+      switch (event.type) {
+        case "thread.session-set":
+          yield* projectionThreadSessionRepository.upsert({
+            threadId: event.payload.threadId,
+            status: event.payload.session.status,
+            providerName: event.payload.session.providerName,
+            runtimeMode: event.payload.session.runtimeMode,
+            activeTurnId: event.payload.session.activeTurnId,
+            lastError: event.payload.session.lastError,
+            updatedAt: event.payload.session.updatedAt,
+          });
+          return;
+
+        case "thread.reverted": {
+          const existingRow = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadSessionRepository.upsert({
+            ...existingRow.value,
+            status: existingRow.value.status === "running" ? "ready" : existingRow.value.status,
+            activeTurnId: null,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        default:
+          return;
       }
-      yield* projectionThreadSessionRepository.upsert({
-        threadId: event.payload.threadId,
-        status: event.payload.session.status,
-        providerName: event.payload.session.providerName,
-        runtimeMode: event.payload.session.runtimeMode,
-        activeTurnId: event.payload.session.activeTurnId,
-        lastError: event.payload.session.lastError,
-        updatedAt: event.payload.session.updatedAt,
-      });
     });
 
     const applyThreadTurnsProjection: ProjectorDefinition["apply"] = Effect.fn(

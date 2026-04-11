@@ -612,17 +612,14 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
     Effect.gen(function* () {
       let activeChecks = 0;
       let maxActiveChecks = 0;
-      let gate: Deferred.Deferred<void> | null = null;
+      const gate = yield* Deferred.make<void>();
 
       const { manager } = yield* createManager(5, {
         subprocessChecker: () =>
           Effect.gen(function* () {
             activeChecks += 1;
             maxActiveChecks = Math.max(maxActiveChecks, activeChecks);
-            const currentGate = gate;
-            if (currentGate) {
-              yield* Deferred.await(currentGate);
-            }
+            yield* Deferred.await(gate);
             activeChecks -= 1;
             return false;
           }),
@@ -634,7 +631,6 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       yield* manager.open(openInput({ threadId: "thread-2" }));
       yield* manager.open(openInput({ threadId: "thread-3" }));
 
-      gate = yield* Deferred.make<void>();
       yield* waitFor(
         Effect.sync(() => maxActiveChecks >= 2),
         "1200 millis",

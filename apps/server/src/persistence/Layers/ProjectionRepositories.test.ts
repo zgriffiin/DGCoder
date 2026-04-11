@@ -61,6 +61,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       const persisted = yield* projects.getById({
         projectId: ProjectId.makeUnsafe("project-null-options"),
       });
+      assert.strictEqual(Option.getOrNull(persisted)?.repositoryIdentity, null);
       assert.deepStrictEqual(Option.getOrNull(persisted)?.defaultModelSelection, {
         provider: "codex",
         model: "gpt-5.4",

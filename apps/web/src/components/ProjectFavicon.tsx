@@ -11,6 +11,23 @@ export function ProjectFavicon({ cwd, className }: { cwd: string; className?: st
     pathname: "/api/project-favicon",
     searchParams: { cwd },
   });
+
+  return (
+    <ProjectFaviconImage
+      key={requestUrl}
+      requestUrl={requestUrl}
+      {...(className !== undefined ? { className } : {})}
+    />
+  );
+}
+
+function ProjectFaviconImage({
+  requestUrl,
+  className,
+}: {
+  requestUrl: string;
+  className?: string;
+}) {
   const authenticatedAsset = useAuthenticatedAssetUrl(requestUrl);
   const [status, setStatus] = useState<"loading" | "loaded" | "error">(() =>
     loadedProjectFaviconSrcs.has(requestUrl) ? "loaded" : "loading",

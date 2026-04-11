@@ -1007,10 +1007,19 @@ it.live("recovers claudeAgent sessions after provider stopAll using persisted re
           },
         });
 
+        yield* harness.waitForReceipt(
+          (receipt): receipt is TurnProcessingQuiescedReceipt =>
+            receipt.type === "turn.processing.quiesced" &&
+            receipt.threadId === THREAD_ID &&
+            receipt.checkpointTurnCount === 1,
+        );
         yield* harness.waitForThread(
           THREAD_ID,
           (entry) =>
-            entry.latestTurn?.turnId === "turn-1" && entry.session?.threadId === "thread-1",
+            entry.latestTurn?.turnId === "turn-1" &&
+            entry.session?.threadId === "thread-1" &&
+            entry.session?.status === "ready" &&
+            entry.session?.activeTurnId === null,
         );
 
         yield* harness.adapterHarness!.adapter.stopAll();
@@ -1262,10 +1271,19 @@ it.live("reverts claudeAgent turns and rolls back provider conversation state", 
           },
         });
 
+        yield* harness.waitForReceipt(
+          (receipt): receipt is TurnProcessingQuiescedReceipt =>
+            receipt.type === "turn.processing.quiesced" &&
+            receipt.threadId === THREAD_ID &&
+            receipt.checkpointTurnCount === 1,
+        );
         yield* harness.waitForThread(
           THREAD_ID,
           (entry) =>
-            entry.latestTurn?.turnId === "turn-1" && entry.session?.threadId === "thread-1",
+            entry.latestTurn?.turnId === "turn-1" &&
+            entry.session?.threadId === "thread-1" &&
+            entry.session?.status === "ready" &&
+            entry.session?.activeTurnId === null,
         );
 
         yield* harness.adapterHarness!.queueTurnResponse(THREAD_ID, {
@@ -1304,12 +1322,20 @@ it.live("reverts claudeAgent turns and rolls back provider conversation state", 
           text: "Second Claude edit",
         });
 
+        yield* harness.waitForReceipt(
+          (receipt): receipt is TurnProcessingQuiescedReceipt =>
+            receipt.type === "turn.processing.quiesced" &&
+            receipt.threadId === THREAD_ID &&
+            receipt.checkpointTurnCount === 2,
+        );
         yield* harness.waitForThread(
           THREAD_ID,
           (entry) =>
             entry.latestTurn?.turnId === "turn-2" &&
             entry.checkpoints.length === 2 &&
-            entry.session?.providerName === "claudeAgent",
+            entry.session?.providerName === "claudeAgent" &&
+            entry.session?.status === "ready" &&
+            entry.session?.activeTurnId === null,
         );
 
         yield* harness.engine.dispatch({

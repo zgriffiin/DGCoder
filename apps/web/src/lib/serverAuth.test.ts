@@ -64,4 +64,14 @@ describe("serverAuth", () => {
       "/?foo=bar#/chat",
     );
   });
+
+  it("keeps using cached auth after the token is stripped from the browser url", () => {
+    stripServerAuthTokenFromCurrentUrl();
+    window.location.href = "http://localhost:3020/?foo=bar#/chat";
+    resolvePrimaryEnvironmentBootstrapUrlMock.mockReturnValueOnce("http://bootstrap.test:4321/");
+
+    expect(resolveServerAuthToken()).toBe("secret-token");
+    expect(resolveServerAuthorizationHeader()).toBe("Bearer secret-token");
+    expect(resolveServerWebSocketProtocols()).toEqual(["t3-auth.c2VjcmV0LXRva2Vu"]);
+  });
 });
