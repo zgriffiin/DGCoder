@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
+
 import type { RepositoryIdentity } from "@t3tools/contracts";
-import { Cache, Duration, Effect, Exit, Layer } from "effect";
+import { Cache, Duration, Effect, Exit, Layer, Option } from "effect";
 import { detectGitHostingProviderFromRemoteUrl, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 
 import { runProcess } from "../../processRunner.ts";
@@ -65,13 +67,27 @@ function buildRepositoryIdentity(input: {
 }
 
 const DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY = 512;
-const DEFAULT_POSITIVE_CACHE_TTL = Duration.minutes(1);
+const DEFAULT_POSITIVE_CACHE_TTL = Duration.minutes(15);
 const DEFAULT_NEGATIVE_CACHE_TTL = Duration.seconds(10);
+const REPOSITORY_IDENTITY_CACHE_TTL_ENV = "T3CODE_REPOSITORY_IDENTITY_CACHE_TTL_MS";
 
 interface RepositoryIdentityResolverOptions {
   readonly cacheCapacity?: number;
   readonly positiveCacheTtl?: Duration.Input;
   readonly negativeCacheTtl?: Duration.Input;
+}
+
+function fingerprintCacheKey(cacheKey: string): string {
+  return createHash("sha256").update(cacheKey).digest("hex").slice(0, 12);
+}
+
+function resolvePositiveCacheTtl(override: Duration.Input | undefined): Duration.Input {
+  if (override !== undefined) {
+    return override;
+  }
+
+  const ttlMs = Number.parseInt(process.env[REPOSITORY_IDENTITY_CACHE_TTL_ENV] ?? "", 10);
+  return Number.isFinite(ttlMs) && ttlMs > 0 ? Duration.millis(ttlMs) : DEFAULT_POSITIVE_CACHE_TTL;
 }
 
 async function resolveRepositoryIdentityCacheKey(cwd: string): Promise<string> {
@@ -116,6 +132,7 @@ async function resolveRepositoryIdentityFromCacheKey(
 
 export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityResolver")(
   function* (options: RepositoryIdentityResolverOptions = {}) {
+    const positiveCacheTtl = resolvePositiveCacheTtl(options.positiveCacheTtl);
     const repositoryIdentityCache = yield* Cache.makeWith<string, RepositoryIdentity | null>({
       capacity: options.cacheCapacity ?? DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY,
       lookup: (cacheKey) => Effect.promise(() => resolveRepositoryIdentityFromCacheKey(cacheKey)),
@@ -123,7 +140,7 @@ export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityR
         onSuccess: (value) =>
           value === null
             ? (options.negativeCacheTtl ?? DEFAULT_NEGATIVE_CACHE_TTL)
-            : (options.positiveCacheTtl ?? DEFAULT_POSITIVE_CACHE_TTL),
+            : positiveCacheTtl,
         onFailure: () => Duration.zero,
       }),
     });
@@ -132,6 +149,16 @@ export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityR
       "RepositoryIdentityResolver.resolve",
     )(function* (cwd) {
       const cacheKey = yield* Effect.promise(() => resolveRepositoryIdentityCacheKey(cwd));
+      const cachedIdentity = yield* Cache.getOption(repositoryIdentityCache, cacheKey);
+      if (Option.isSome(cachedIdentity)) {
+        return cachedIdentity.value;
+      }
+
+      yield* Effect.logDebug("Repository identity cache miss", {
+        cacheKeyFingerprint: fingerprintCacheKey(cacheKey),
+        cacheKeyRedacted: true,
+      });
+
       return yield* Cache.get(repositoryIdentityCache, cacheKey);
     });
 

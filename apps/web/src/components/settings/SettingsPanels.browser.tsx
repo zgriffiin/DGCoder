@@ -46,13 +46,11 @@ describe("GeneralSettingsPanel observability", () => {
     resetServerStateForTests();
     await __resetLocalApiForTests();
     localStorage.clear();
-    document.body.innerHTML = "";
   });
 
   afterEach(async () => {
     resetServerStateForTests();
     await __resetLocalApiForTests();
-    document.body.innerHTML = "";
   });
 
   it("shows diagnostics inside About with a single logs-folder action", async () => {
@@ -176,7 +174,7 @@ describe("GeneralSettingsPanel observability", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await page.getByRole("button", { name: "Caveman response style" }).click();
+    await page.getByLabelText("Caveman response style").click();
     await page.getByText("Ultra").click();
 
     await vi.waitFor(() =>

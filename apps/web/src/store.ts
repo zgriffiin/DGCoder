@@ -18,8 +18,15 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
+import {
+  THREAD_ACTIVITIES_WINDOW_SIZE,
+  THREAD_CHECKPOINTS_WINDOW_SIZE,
+  THREAD_MESSAGES_WINDOW_SIZE,
+  THREAD_PROPOSED_PLANS_WINDOW_SIZE,
+} from "@t3tools/shared/threadHistoryWindow";
 import { Schema } from "effect";
 import { create } from "zustand";
+import { resolveServerUrl } from "./lib/utils";
 import {
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -89,10 +96,10 @@ const initialState: AppState = {
   environmentStateById: {},
 };
 
-const MAX_THREAD_MESSAGES = 2_000;
-const MAX_THREAD_CHECKPOINTS = 500;
-const MAX_THREAD_PROPOSED_PLANS = 200;
-const MAX_THREAD_ACTIVITIES = 500;
+const MAX_THREAD_MESSAGES = THREAD_MESSAGES_WINDOW_SIZE;
+const MAX_THREAD_CHECKPOINTS = THREAD_CHECKPOINTS_WINDOW_SIZE;
+const MAX_THREAD_PROPOSED_PLANS = THREAD_PROPOSED_PLANS_WINDOW_SIZE;
+const MAX_THREAD_ACTIVITIES = THREAD_ACTIVITIES_WINDOW_SIZE;
 const EMPTY_THREAD_IDS: ThreadId[] = [];
 const EMPTY_MESSAGE_IDS: MessageId[] = [];
 const EMPTY_ACTIVITY_IDS: string[] = [];
@@ -952,30 +959,36 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
   return "codex";
 }
 
-function resolveWsHttpOrigin(): string {
-  if (typeof window === "undefined") return "";
-  const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
-  const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
-  const wsCandidate =
-    typeof bridgeWsUrl === "string" && bridgeWsUrl.length > 0
-      ? bridgeWsUrl
-      : typeof envWsUrl === "string" && envWsUrl.length > 0
-        ? envWsUrl
-        : null;
-  if (!wsCandidate) return window.location.origin;
-  try {
-    const wsUrl = new URL(wsCandidate);
-    const protocol =
-      wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
-    return `${protocol}//${wsUrl.host}`;
-  } catch {
-    return window.location.origin;
+function resolveAttachmentServerBaseUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
   }
+
+  const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
+  if (typeof bridgeWsUrl === "string" && bridgeWsUrl.length > 0) {
+    return bridgeWsUrl;
+  }
+
+  const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
+  if (typeof envWsUrl === "string" && envWsUrl.length > 0) {
+    return envWsUrl;
+  }
+
+  return window.location.origin;
 }
 
 function toAttachmentPreviewUrl(rawUrl: string): string {
   if (rawUrl.startsWith("/")) {
-    return `${resolveWsHttpOrigin()}${rawUrl}`;
+    const serverBaseUrl = resolveAttachmentServerBaseUrl();
+    if (!serverBaseUrl) {
+      return rawUrl;
+    }
+
+    return resolveServerUrl({
+      url: serverBaseUrl,
+      protocol: window.location.protocol === "https:" ? "https" : "http",
+      pathname: rawUrl,
+    });
   }
   return rawUrl;
 }

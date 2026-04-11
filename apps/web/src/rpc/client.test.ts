@@ -72,6 +72,27 @@ class MockWebSocket {
 const originalWebSocket = globalThis.WebSocket;
 const originalFetch = globalThis.fetch;
 
+const expectedSettings = {
+  ...DEFAULT_SERVER_SETTINGS,
+  enableAssistantStreaming: true,
+  defaultThreadEnvMode: "worktree" as const,
+  textGenerationModelSelection: {
+    provider: "codex" as const,
+    model: "gpt-5.4",
+  },
+  providers: {
+    ...DEFAULT_SERVER_SETTINGS.providers,
+    codex: {
+      ...DEFAULT_SERVER_SETTINGS.providers.codex,
+      homePath: "/tmp/codex-home",
+    },
+    claudeAgent: {
+      ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+      enabled: false,
+    },
+  },
+};
+
 function getSocket(): MockWebSocket {
   const socket = sockets.at(-1);
   if (!socket) {
@@ -123,25 +144,6 @@ afterEach(() => {
 
 describe("WsRpcAtomClient", () => {
   it("runs unary requests through the AtomRpc service", async () => {
-    const expectedSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      enableAssistantStreaming: true,
-      defaultThreadEnvMode: "worktree" as const,
-      textGenerationModelSelection: {
-        provider: "codex" as const,
-        model: "gpt-5.4",
-      },
-      providers: {
-        codex: {
-          ...DEFAULT_SERVER_SETTINGS.providers.codex,
-          homePath: "/tmp/codex-home",
-        },
-        claudeAgent: {
-          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
-          enabled: false,
-        },
-      },
-    };
     const requestPromise = runRpc((client) => client(WS_METHODS.serverGetSettings, {}));
 
     await waitFor(() => {
@@ -173,25 +175,6 @@ describe("WsRpcAtomClient", () => {
   });
 
   it("exposes atom-backed query state for unary RPC methods", async () => {
-    const expectedSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      enableAssistantStreaming: true,
-      defaultThreadEnvMode: "worktree" as const,
-      textGenerationModelSelection: {
-        provider: "codex" as const,
-        model: "gpt-5.4",
-      },
-      providers: {
-        codex: {
-          ...DEFAULT_SERVER_SETTINGS.providers.codex,
-          homePath: "/tmp/codex-home",
-        },
-        claudeAgent: {
-          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
-          enabled: false,
-        },
-      },
-    };
     const registry = AtomRegistry.make();
     const query = WsRpcAtomClient.query(WS_METHODS.serverGetSettings, {});
     const release = registry.mount(query);

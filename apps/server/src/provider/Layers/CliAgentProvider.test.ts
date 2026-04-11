@@ -256,12 +256,18 @@ describe("checkCliAgentProviderStatus failure states", () => {
       assert.strictEqual(status.auth.status, "unauthenticated");
       assert.strictEqual(
         status.message,
-        'Kiro is not authenticated. Run `wsl.exe --exec bash -lc "exec \\"$@\\"" bash kiro-cli login` and try again.',
+        "Kiro is not authenticated. Run `kiro-cli login` and try again.",
       );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          ServerSettingsService.layerTest(),
+          ServerSettingsService.layerTest({
+            providers: {
+              kiro: {
+                executionMode: "host",
+              },
+            },
+          }),
           mockSpawnerLayer((args) => {
             if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
               return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };

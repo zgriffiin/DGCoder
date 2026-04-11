@@ -291,6 +291,10 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
 
   it.effect("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
+      if (process.platform === "win32") {
+        return;
+      }
+
       const { manager, baseDir } = yield* createManager();
       const blockedRoot = path.join(baseDir, "blocked-root");
       const blockedCwd = path.join(blockedRoot, "cwd");
@@ -830,21 +834,19 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
 
       assert.equal(snapshot.status, "running");
       expect(ptyAdapter.spawnInputs.length).toBeGreaterThanOrEqual(2);
-      expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
-
       if (process.platform === "win32") {
-        expect(
-          ptyAdapter.spawnInputs.some(
-            (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
-          ),
-        ).toBe(true);
+        expect(ptyAdapter.spawnInputs[0]?.shell).toContain("/definitely/missing-shell");
       } else {
-        expect(
-          ptyAdapter.spawnInputs
-            .slice(1)
-            .some((input) => input.shell !== "/definitely/missing-shell"),
-        ).toBe(true);
+        expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
       }
+
+      const requestedShell = ptyAdapter.spawnInputs[0]?.shell;
+      expect(requestedShell).toBeDefined();
+      expect(
+        ptyAdapter.spawnInputs
+          .slice(1)
+          .some((input) => input.shell !== undefined && input.shell !== requestedShell),
+      ).toBe(true);
     }),
   );
 

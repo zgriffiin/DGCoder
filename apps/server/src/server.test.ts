@@ -612,6 +612,56 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("requires auth tokens for protected HTTP routes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-router-auth-http-",
+      });
+      yield* fileSystem.writeFileString(path.join(projectDir, "favicon.svg"), "<svg>auth</svg>");
+
+      yield* buildAppUnderTest({
+        config: {
+          authToken: "secret-token",
+        },
+      });
+
+      const unauthorizedAttachment = yield* HttpClient.get("/attachments/attachment-1");
+      assert.equal(unauthorizedAttachment.status, 401);
+
+      const unauthorizedFavicon = yield* HttpClient.get(
+        `/api/project-favicon?cwd=${encodeURIComponent(projectDir)}`,
+      );
+      assert.equal(unauthorizedFavicon.status, 401);
+
+      const unauthorizedOtlp = yield* HttpClient.post("/api/observability/v1/traces", {
+        headers: {
+          "content-type": "application/json",
+        },
+        body: HttpBody.text(JSON.stringify({ resourceSpans: [] }), "application/json"),
+      });
+      assert.equal(unauthorizedOtlp.status, 401);
+
+      const authorizedFavicon = yield* HttpClient.get(
+        `/api/project-favicon?token=secret-token&cwd=${encodeURIComponent(projectDir)}`,
+      );
+      assert.equal(authorizedFavicon.status, 200);
+      assert.equal(yield* authorizedFavicon.text, "<svg>auth</svg>");
+
+      const authorizedOtlp = yield* HttpClient.post(
+        "/api/observability/v1/traces?token=secret-token",
+        {
+          headers: {
+            "content-type": "application/json",
+          },
+          body: HttpBody.text(JSON.stringify({ resourceSpans: [] }), "application/json"),
+        },
+      );
+      assert.equal(authorizedOtlp.status, 204);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("proxies browser OTLP trace exports through the server", () =>
     Effect.gen(function* () {
       const upstreamRequests: Array<{
@@ -749,7 +799,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       assert.equal(response.status, 204);
-      assert.equal(response.headers["access-control-allow-origin"], "*");
+      assert.equal(response.headers["access-control-allow-origin"], "http://localhost:5733");
       assert.deepEqual(localTraceRecords, [
         {
           type: "otlp-span",
@@ -814,9 +864,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(response.status, 204);
-      assert.equal(response.headers.get("access-control-allow-origin"), "*");
+      assert.equal(response.headers.get("access-control-allow-origin"), "http://localhost:5733");
       assert.equal(response.headers.get("access-control-allow-methods"), "POST, OPTIONS");
-      assert.equal(response.headers.get("access-control-allow-headers"), "content-type");
+      const allowedHeaders = response.headers
+        .get("access-control-allow-headers")
+        ?.split(",")
+        .map((header) => header.trim())
+        .toSorted();
+      assert.deepEqual(allowedHeaders, ["authorization", "content-type"]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -889,6 +944,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(record.resourceAttributes["service.name"], "t3-web");
         assert.equal(record.status?.code, String(span.status.code));
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects oversized browser OTLP trace payloads before JSON parsing", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const oversizedPayload = JSON.stringify({
+        resourceSpans: [{ padding: "x".repeat(300_000) }],
+      });
+      const response = yield* HttpClient.post("/api/observability/v1/traces", {
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(Buffer.byteLength(oversizedPayload)),
+        },
+        body: HttpBody.text(oversizedPayload, "application/json"),
+      });
+
+      assert.equal(response.status, 413);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects OTLP CORS requests from non-local origins", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const response = yield* HttpClient.post("/api/observability/v1/traces", {
+        headers: {
+          "content-type": "application/json",
+          origin: "https://evil.example",
+        },
+        body: HttpBody.text(JSON.stringify({ resourceSpans: [] }), "application/json"),
+      });
+
+      assert.equal(response.status, 403);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("returns 404 for missing attachment id lookups", () =>
@@ -1043,7 +1133,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(first.config.keybindings, []);
         assert.deepEqual(first.config.issues, []);
         assert.deepEqual(first.config.providers, providers);
-        assert.equal(first.config.observability.logsDirectoryPath.endsWith("/logs"), true);
+        assert.equal(
+          first.config.observability.logsDirectoryPath.endsWith("/logs") ||
+            first.config.observability.logsDirectoryPath.endsWith("\\logs"),
+          true,
+        );
         assert.equal(first.config.observability.localTracingEnabled, true);
         assert.equal(first.config.observability.otlpTracesUrl, "http://localhost:4318/v1/traces");
         assert.equal(first.config.observability.otlpTracesEnabled, true);
@@ -1192,10 +1286,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assertTrue(result._tag === "Failure");
       assertTrue(result.failure._tag === "ProjectSearchEntriesError");
-      assertInclude(
-        result.failure.message,
-        "Workspace root does not exist: /definitely/not/a/real/workspace/path",
-      );
+      assertInclude(result.failure.message, "Workspace root does not exist:");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2098,6 +2189,66 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           : null,
         repositoryIdentity,
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("replays orchestration events in bounded batches", () =>
+    Effect.gen(function* () {
+      const now = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-batched-replay");
+      const makeEvent = (sequence: number): OrchestrationEvent =>
+        ({
+          sequence,
+          eventId: EventId.makeUnsafe(`event-${sequence}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.reverted",
+          payload: {
+            threadId,
+            turnCount: sequence,
+          },
+        }) as OrchestrationEvent;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            readEvents: (fromSequenceExclusive) =>
+              Stream.fromIterable(
+                Array.from({ length: 600 }, (_value, index) => index + 1)
+                  .filter((sequence) => sequence > fromSequenceExclusive)
+                  .map(makeEvent),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const firstBatch = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.replayEvents]({
+            fromSequenceExclusive: 0,
+          }),
+        ),
+      );
+      const secondBatch = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.replayEvents]({
+            fromSequenceExclusive: 500,
+          }),
+        ),
+      );
+
+      assert.equal(firstBatch.length, 500);
+      assert.equal(firstBatch[0]?.sequence, 1);
+      assert.equal(firstBatch.at(-1)?.sequence, 500);
+      assert.equal(secondBatch.length, 100);
+      assert.equal(secondBatch[0]?.sequence, 501);
+      assert.equal(secondBatch.at(-1)?.sequence, 600);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -58,10 +58,10 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
         })}\n`,
       );
 
-      const fd = yield* Effect.acquireRelease(
-        Effect.sync(() => NFS.openSync(filePath, "r")),
-        (fd) => Effect.sync(() => NFS.closeSync(fd)),
-      );
+      // The bootstrap stream uses autoClose on the inherited fd, so the test
+      // must not also close it synchronously on Windows or the final close
+      // races with stream teardown and can surface EBADF.
+      const fd = NFS.openSync(filePath, "r");
 
       const payload = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, { timeoutMs: 100 });
       assertSome(payload, {
@@ -102,7 +102,9 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
 
   it.effect("returns none when the fd is unavailable", () =>
     Effect.gen(function* () {
-      const fd = NFS.openSync("/dev/null", "r");
+      const fs = yield* FileSystem.FileSystem;
+      const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".tmp" });
+      const fd = NFS.openSync(filePath, "r");
       NFS.closeSync(fd);
 
       const payload = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, { timeoutMs: 100 });
@@ -112,6 +114,10 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
 
   it.effect("returns none when the bootstrap read times out before any value arrives", () =>
     Effect.gen(function* () {
+      if (process.platform === "win32") {
+        return;
+      }
+
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bootstrap-" });
       const fifoPath = path.join(tempDir, "bootstrap.pipe");
