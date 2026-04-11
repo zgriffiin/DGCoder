@@ -18,7 +18,6 @@ jobs:
       cancel-in-progress: true
     env:
       CODERABBIT_API_KEY: ${{ secrets.CODERABBIT_API_KEY }}
-      CODERABBIT_REVIEW_FILE: ${{ runner.temp }}/coderabbit-review.txt
     steps:
       - id: guard
         name: Check review prerequisites
@@ -38,6 +37,14 @@ jobs:
 
           echo "should_run=true" >> "$GITHUB_OUTPUT"
           echo "reason=ok" >> "$GITHUB_OUTPUT"
+
+      - id: review-file
+        name: Set review artifact path
+        shell: bash
+        run: |
+          review_file="${RUNNER_TEMP}/coderabbit-review.txt"
+          echo "CODERABBIT_REVIEW_FILE=${review_file}" >> "$GITHUB_ENV"
+          echo "review_file=${review_file}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         if: steps.guard.outputs.should_run == 'true'
@@ -93,7 +100,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coderabbit-review
-          path: ${{ env.CODERABBIT_REVIEW_FILE }}
+          path: ${{ steps.review-file.outputs.review_file }}
           if-no-files-found: warn
 
       - name: Write workflow summary
@@ -127,7 +134,7 @@ jobs:
         env:
           CODERABBIT_BASE_BRANCH: ${{ steps.review.outputs.base_branch }}
           CODERABBIT_EXIT_CODE: ${{ steps.review.outputs.exit_code }}
-          CODERABBIT_REVIEW_FILE: ${{ env.CODERABBIT_REVIEW_FILE }}
+          CODERABBIT_REVIEW_FILE: ${{ steps.review-file.outputs.review_file }}
         with:
           script: |
             const fs = require("node:fs");
