@@ -28,11 +28,6 @@ import { GitManager } from "../Services/GitManager.ts";
 
 const GIT_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
 
-interface GitStatusChange {
-  readonly cwd: string;
-  readonly event: GitStatusStreamEvent;
-}
-
 interface CachedValue<T> {
   readonly fingerprint: string;
   readonly value: T;
@@ -45,6 +40,11 @@ interface CachedGitStatus {
 
 interface ActiveRemotePoller {
   readonly fiber: Fiber.Fiber<void, never>;
+  readonly subscriberCount: number;
+}
+
+interface ActiveStatusChannel {
+  readonly pubsub: PubSub.PubSub<GitStatusStreamEvent>;
   readonly subscriberCount: number;
 }
 
@@ -64,15 +64,12 @@ export const GitStatusBroadcasterLive = Layer.effect(
   GitStatusBroadcaster,
   Effect.gen(function* () {
     const gitManager = yield* GitManager;
-    const changesPubSub = yield* Effect.acquireRelease(
-      PubSub.unbounded<GitStatusChange>(),
-      (pubsub) => PubSub.shutdown(pubsub),
-    );
     const broadcasterScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
       Scope.close(scope, Exit.void),
     );
     const cacheRef = yield* Ref.make(new Map<string, CachedGitStatus>());
     const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
+    const statusChannelsRef = yield* SynchronizedRef.make(new Map<string, ActiveStatusChannel>());
 
     const getCachedStatus = Effect.fn("getCachedStatus")(function* (cwd: string) {
       return yield* Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd) ?? null));
@@ -98,12 +95,9 @@ export const GitStatusBroadcasterLive = Layer.effect(
       });
 
       if (options?.publish && shouldPublish) {
-        yield* PubSub.publish(changesPubSub, {
-          cwd,
-          event: {
-            _tag: "localUpdated",
-            local,
-          },
+        yield* publishStatusChange(cwd, {
+          _tag: "localUpdated",
+          local,
         });
       }
 
@@ -130,12 +124,9 @@ export const GitStatusBroadcasterLive = Layer.effect(
       });
 
       if (options?.publish && shouldPublish) {
-        yield* PubSub.publish(changesPubSub, {
-          cwd,
-          event: {
-            _tag: "remoteUpdated",
-            remote,
-          },
+        yield* publishStatusChange(cwd, {
+          _tag: "remoteUpdated",
+          remote,
         });
       }
 
@@ -189,6 +180,19 @@ export const GitStatusBroadcasterLive = Layer.effect(
       yield* gitManager.invalidateRemoteStatus(cwd);
       const remote = yield* gitManager.remoteStatus({ cwd });
       return yield* updateCachedRemoteStatus(cwd, remote, { publish: true });
+    });
+
+    const publishStatusChange = Effect.fn("publishStatusChange")(function* (
+      cwd: string,
+      event: GitStatusStreamEvent,
+    ) {
+      const activeChannels = yield* SynchronizedRef.get(statusChannelsRef);
+      const activeChannel = activeChannels.get(cwd);
+      if (!activeChannel) {
+        return;
+      }
+
+      yield* PubSub.publish(activeChannel.pubsub, event);
     });
 
     const refreshStatus: GitStatusBroadcasterShape["refreshStatus"] = Effect.fn("refreshStatus")(
@@ -273,16 +277,77 @@ export const GitStatusBroadcasterLive = Layer.effect(
       }
     });
 
+    const retainStatusChannel = Effect.fn("retainStatusChannel")(function* (cwd: string) {
+      return yield* SynchronizedRef.modifyEffect(statusChannelsRef, (activeChannels) => {
+        const existing = activeChannels.get(cwd);
+        if (existing) {
+          const nextChannels = new Map(activeChannels);
+          nextChannels.set(cwd, {
+            ...existing,
+            subscriberCount: existing.subscriberCount + 1,
+          });
+          return Effect.succeed([existing.pubsub, nextChannels] as const);
+        }
+
+        return PubSub.unbounded<GitStatusStreamEvent>().pipe(
+          Effect.map((pubsub) => {
+            const nextChannels = new Map(activeChannels);
+            nextChannels.set(cwd, {
+              pubsub,
+              subscriberCount: 1,
+            });
+            return [pubsub, nextChannels] as const;
+          }),
+        );
+      });
+    });
+
+    const releaseStatusChannel = Effect.fn("releaseStatusChannel")(function* (cwd: string) {
+      const channelToShutdown = yield* SynchronizedRef.modify(
+        statusChannelsRef,
+        (activeChannels) => {
+          const existing = activeChannels.get(cwd);
+          if (!existing) {
+            return [null, activeChannels] as const;
+          }
+
+          if (existing.subscriberCount > 1) {
+            const nextChannels = new Map(activeChannels);
+            nextChannels.set(cwd, {
+              ...existing,
+              subscriberCount: existing.subscriberCount - 1,
+            });
+            return [null, nextChannels] as const;
+          }
+
+          const nextChannels = new Map(activeChannels);
+          nextChannels.delete(cwd);
+          return [existing.pubsub, nextChannels] as const;
+        },
+      );
+
+      if (channelToShutdown) {
+        yield* PubSub.shutdown(channelToShutdown).pipe(Effect.ignore);
+      }
+    });
+
     const streamStatus: GitStatusBroadcasterShape["streamStatus"] = (input) =>
       Stream.unwrap(
         Effect.gen(function* () {
           const normalizedCwd = normalizeCwd(input.cwd);
-          const subscription = yield* PubSub.subscribe(changesPubSub);
+          const channel = yield* retainStatusChannel(normalizedCwd);
+          const subscription = yield* PubSub.subscribe(channel);
           const initialLocal = yield* getOrLoadLocalStatus(normalizedCwd);
           const initialRemote = (yield* getCachedStatus(normalizedCwd))?.remote?.value ?? null;
           yield* retainRemotePoller(normalizedCwd);
 
-          const release = releaseRemotePoller(normalizedCwd).pipe(Effect.ignore, Effect.asVoid);
+          const release = Effect.all(
+            [
+              releaseRemotePoller(normalizedCwd).pipe(Effect.ignore),
+              releaseStatusChannel(normalizedCwd).pipe(Effect.ignore),
+            ],
+            { discard: true },
+          ).pipe(Effect.asVoid);
 
           return Stream.concat(
             Stream.make({
@@ -290,10 +355,7 @@ export const GitStatusBroadcasterLive = Layer.effect(
               local: initialLocal,
               remote: initialRemote,
             }),
-            Stream.fromSubscription(subscription).pipe(
-              Stream.filter((event) => event.cwd === normalizedCwd),
-              Stream.map((event) => event.event),
-            ),
+            Stream.fromSubscription(subscription),
           ).pipe(Stream.ensuring(release));
         }),
       );

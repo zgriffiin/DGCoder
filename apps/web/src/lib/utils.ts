@@ -46,6 +46,7 @@ export const resolveServerUrl = (options?: {
   url?: string | undefined;
   protocol?: "http" | "https" | "ws" | "wss" | undefined;
   pathname?: string | undefined;
+  preserveSearchParams?: boolean | undefined;
   searchParams?: Record<string, string> | undefined;
 }): string => {
   const rawUrl = isNonEmptyString(options?.url)
@@ -61,8 +62,13 @@ export const resolveServerUrl = (options?: {
   } else {
     parsedUrl.pathname = "/";
   }
+  if (!options?.preserveSearchParams) {
+    parsedUrl.search = "";
+  }
   if (options?.searchParams) {
-    const mergedSearchParams = new URLSearchParams(parsedUrl.search);
+    const mergedSearchParams = new URLSearchParams(
+      options?.preserveSearchParams ? parsedUrl.search : "",
+    );
     for (const [key, value] of Object.entries(options.searchParams)) {
       mergedSearchParams.set(key, value);
     }

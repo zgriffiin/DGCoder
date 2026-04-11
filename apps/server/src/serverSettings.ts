@@ -42,6 +42,7 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerConfig } from "./config";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import { writeFileStringAtomically } from "./atomicWrite";
 
 export interface ServerSettingsShape {
   /** Start the settings runtime and attach file watching. */
@@ -219,14 +220,17 @@ const makeServerSettings = Effect.gen(function* () {
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
 
   const writeSettingsAtomically = (settings: ServerSettings) => {
-    const tempPath = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
     const sparseSettings = stripDefaultServerSettings(settings, DEFAULT_SERVER_SETTINGS) ?? {};
 
     return Effect.succeed(`${JSON.stringify(sparseSettings, null, 2)}\n`).pipe(
-      Effect.tap(() => fs.makeDirectory(pathService.dirname(settingsPath), { recursive: true })),
-      Effect.tap((encoded) => fs.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fs.rename(tempPath, settingsPath)),
-      Effect.ensuring(fs.remove(tempPath, { force: true }).pipe(Effect.ignore({ log: true }))),
+      Effect.flatMap((encoded) =>
+        writeFileStringAtomically({
+          filePath: settingsPath,
+          contents: encoded,
+          fileSystem: fs,
+          path: pathService,
+        }),
+      ),
       Effect.mapError(
         (cause) =>
           new ServerSettingsError({

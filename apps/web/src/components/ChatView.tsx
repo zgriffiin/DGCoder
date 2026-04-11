@@ -211,6 +211,7 @@ import {
   useServerKeybindings,
 } from "~/rpc/serverState";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
+import { useAuthenticatedAssetUrl } from "~/hooks/useAuthenticatedAssetUrl";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -4082,6 +4083,7 @@ export default function ChatView(props: ChatViewProps) {
     setExpandedImage(preview);
   }, []);
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
+  const expandedImageAsset = useAuthenticatedAssetUrl(expandedImageItem?.src);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (!isServerThread) {
@@ -4742,7 +4744,7 @@ export default function ChatView(props: ChatViewProps) {
               <XIcon />
             </Button>
             <img
-              src={expandedImageItem.src}
+              src={expandedImageAsset.src}
               alt={expandedImageItem.name}
               className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
               draggable={false}

@@ -3,6 +3,7 @@ import { Duration, Effect, Layer, Schedule } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
+import { resolveServerWebSocketProtocols } from "../lib/serverAuth";
 import { resolveServerUrl } from "../lib/utils";
 import {
   acknowledgeRpcRequest,
@@ -30,6 +31,7 @@ export function createWsRpcProtocolLayer(url?: string) {
     protocol: window.location.protocol === "https:" ? "wss" : "ws",
     pathname: "/ws",
   });
+  const protocols = resolveServerWebSocketProtocols(url);
   const trackingWebSocketConstructorLayer = Layer.succeed(
     Socket.WebSocketConstructor,
     (socketUrl, protocols) => {
@@ -66,9 +68,10 @@ export function createWsRpcProtocolLayer(url?: string) {
       return socket;
     },
   );
-  const socketLayer = Socket.layerWebSocket(resolvedUrl).pipe(
-    Layer.provide(trackingWebSocketConstructorLayer),
-  );
+  const socketLayer = Socket.layerWebSocket(
+    resolvedUrl,
+    protocols ? { protocols: [...protocols] } : undefined,
+  ).pipe(Layer.provide(trackingWebSocketConstructorLayer));
   const retryPolicy = Schedule.addDelay(Schedule.recurs(WS_RECONNECT_MAX_RETRIES), (retryCount) =>
     Effect.succeed(Duration.millis(getWsReconnectDelayMsForRetry(retryCount) ?? 0)),
   );

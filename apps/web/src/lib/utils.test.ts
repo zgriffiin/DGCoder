@@ -53,7 +53,7 @@ describe("resolveServerUrl", () => {
     );
   });
 
-  it("preserves existing query params while merging explicit search params", () => {
+  it("drops existing query params by default when resolving HTTP asset urls", () => {
     expect(
       resolveServerUrl({
         url: "ws://desktop.test:4321/?token=secret-token",
@@ -61,7 +61,17 @@ describe("resolveServerUrl", () => {
         pathname: "/api/project-favicon",
         searchParams: { cwd: "/repo" },
       }),
-    ).toBe("http://desktop.test:4321/api/project-favicon?token=secret-token&cwd=%2Frepo");
+    ).toBe("http://desktop.test:4321/api/project-favicon?cwd=%2Frepo");
+  });
+
+  it("drops existing query params for websocket urls now that auth is negotiated separately", () => {
+    expect(
+      resolveServerUrl({
+        url: "ws://desktop.test:4321/?token=secret-token",
+        protocol: "ws",
+        pathname: "/ws",
+      }),
+    ).toBe("ws://desktop.test:4321/ws");
   });
 });
 

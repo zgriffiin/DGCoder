@@ -16,6 +16,7 @@ import {
   resetWsConnectionStateForTests,
 } from "./rpc/wsConnectionState";
 import { WsTransport } from "./wsTransport";
+import { resolveWebSocketAuthProtocol } from "@t3tools/shared/webSocketAuthProtocol";
 
 type WsEventType = "open" | "message" | "close" | "error";
 type WsEvent = { code?: number; data?: unknown; reason?: string; type?: string };
@@ -31,11 +32,13 @@ class MockWebSocket {
 
   readyState = MockWebSocket.CONNECTING;
   readonly sent: string[] = [];
+  readonly protocols: string | string[] | undefined;
   readonly url: string;
   private readonly listeners = new Map<WsEventType, Set<WsListener>>();
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     this.url = url;
+    this.protocols = protocols;
     sockets.push(this);
   }
 
@@ -142,14 +145,15 @@ afterEach(async () => {
 });
 
 describe("WsTransport", () => {
-  it("normalizes root websocket urls to /ws and preserves query params", async () => {
+  it("normalizes root websocket urls to /ws and moves auth into a subprotocol", async () => {
     const transport = new WsTransport("ws://localhost:3020/?token=secret-token");
 
     await waitFor(() => {
       expect(sockets).toHaveLength(1);
     });
 
-    expect(getSocket().url).toBe("ws://localhost:3020/ws?token=secret-token");
+    expect(getSocket().url).toBe("ws://localhost:3020/ws");
+    expect(getSocket().protocols).toEqual([resolveWebSocketAuthProtocol("secret-token")]);
     await transport.dispose();
   });
 

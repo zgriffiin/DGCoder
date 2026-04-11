@@ -863,7 +863,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         if (config.authToken && Option.isNone(HttpServerRequest.toURL(request))) {
           return HttpServerResponse.text("Invalid WebSocket URL", { status: 400 });
         }
-        if (!isRequestAuthorized(request, config.authToken)) {
+        if (
+          !isRequestAuthorized(request, config.authToken, {
+            allowWebSocketProtocolToken: true,
+          })
+        ) {
           return unauthorizedResponse("Unauthorized WebSocket connection");
         }
         return yield* rpcWebSocketHttpEffect;

@@ -648,9 +648,12 @@ interface TerminalManagerOptions {
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
   subprocessPollIntervalMs?: number;
+  subprocessPollConcurrency?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
 }
+
+const DEFAULT_SUBPROCESS_POLL_CONCURRENCY = 4;
 
 const makeTerminalManager = Effect.fn("makeTerminalManager")(function* () {
   const { terminalLogsDir } = yield* ServerConfig;
@@ -673,6 +676,10 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
     const subprocessChecker = options.subprocessChecker ?? defaultSubprocessChecker;
     const subprocessPollIntervalMs =
       options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
+    const subprocessPollConcurrency = Math.max(
+      1,
+      options.subprocessPollConcurrency ?? DEFAULT_SUBPROCESS_POLL_CONCURRENCY,
+    );
     const processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
     const maxRetainedInactiveSessions =
       options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
@@ -1511,7 +1518,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       });
 
       yield* Effect.forEach(runningSessions, checkSubprocessActivity, {
-        concurrency: "unbounded",
+        concurrency: subprocessPollConcurrency,
         discard: true,
       });
     });
