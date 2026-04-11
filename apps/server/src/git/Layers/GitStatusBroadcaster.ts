@@ -337,9 +337,9 @@ export const GitStatusBroadcasterLive = Layer.effect(
           const normalizedCwd = normalizeCwd(input.cwd);
           const initialLocal = yield* getOrLoadLocalStatus(normalizedCwd);
           const initialRemote = (yield* getCachedStatus(normalizedCwd))?.remote?.value ?? null;
-          yield* retainRemotePoller(normalizedCwd);
           const channel = yield* retainStatusChannel(normalizedCwd);
           const subscription = yield* PubSub.subscribe(channel);
+          yield* retainRemotePoller(normalizedCwd);
 
           const release = Effect.all(
             [

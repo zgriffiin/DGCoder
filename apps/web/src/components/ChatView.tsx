@@ -817,6 +817,7 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
   const localDispatchTargetThreadIdRef = useRef<ThreadId | null>(null);
+  const startDispatchPendingRef = useRef(false);
   const queuedInterruptThreadIdRef = useRef<ThreadId | null>(null);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -1774,14 +1775,11 @@ export default function ChatView(props: ChatViewProps) {
   const beginInterruptibleDispatch = useCallback(
     (threadId: ThreadId) => {
       localDispatchTargetThreadIdRef.current = threadId;
+      startDispatchPendingRef.current = true;
       clearQueuedInterrupt();
     },
     [clearQueuedInterrupt],
   );
-  const finishInterruptibleDispatch = useCallback(() => {
-    localDispatchTargetThreadIdRef.current = null;
-    clearQueuedInterrupt();
-  }, [clearQueuedInterrupt]);
   const dispatchTurnInterrupt = useCallback(
     async (threadId: ThreadId) => {
       const api = readEnvironmentApi(environmentId);
@@ -1820,6 +1818,18 @@ export default function ChatView(props: ChatViewProps) {
     },
     [dispatchTurnInterrupt],
   );
+  const markStartDispatchResolved = useCallback(
+    async (threadId: ThreadId) => {
+      startDispatchPendingRef.current = false;
+      await flushQueuedInterrupt(threadId);
+    },
+    [flushQueuedInterrupt],
+  );
+  const finishInterruptibleDispatch = useCallback(() => {
+    localDispatchTargetThreadIdRef.current = null;
+    startDispatchPendingRef.current = false;
+    clearQueuedInterrupt();
+  }, [clearQueuedInterrupt]);
 
   const focusComposer = useCallback(() => {
     composerEditorRef.current?.focusAtEnd();
@@ -3340,7 +3350,7 @@ export default function ChatView(props: ChatViewProps) {
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
-      await flushQueuedInterrupt(threadIdForSend);
+      await markStartDispatchResolved(threadIdForSend);
     })().catch(async (err: unknown) => {
       if (
         !turnStartSucceeded &&
@@ -3378,7 +3388,7 @@ export default function ChatView(props: ChatViewProps) {
   const onInterrupt = async () => {
     if (!activeThread) return;
     const interruptThreadId = localDispatchTargetThreadIdRef.current ?? activeThread.id;
-    if (sendInFlightRef.current || isSendBusy) {
+    if (startDispatchPendingRef.current) {
       queuedInterruptThreadIdRef.current = interruptThreadId;
       setIsInterruptPending(true);
       return;
@@ -3643,7 +3653,7 @@ export default function ChatView(props: ChatViewProps) {
             : {}),
           createdAt: messageCreatedAt,
         });
-        await flushQueuedInterrupt(threadIdForSend);
+        await markStartDispatchResolved(threadIdForSend);
         // Optimistically open the plan sidebar when implementing (not refining).
         // "default" mode here means the agent is executing the plan, which produces
         // step-tracking activities that the sidebar will display.
@@ -3674,7 +3684,7 @@ export default function ChatView(props: ChatViewProps) {
       beginLocalDispatch,
       finishInterruptibleDispatch,
       forceStickToBottom,
-      flushQueuedInterrupt,
+      markStartDispatchResolved,
       isConnecting,
       isSendBusy,
       isServerThread,
@@ -3766,7 +3776,7 @@ export default function ChatView(props: ChatViewProps) {
           createdAt,
         });
       })
-      .then(() => flushQueuedInterrupt(nextThreadId))
+      .then(() => markStartDispatchResolved(nextThreadId))
       .then(() => {
         return waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, nextThreadId));
       })
@@ -3804,7 +3814,7 @@ export default function ChatView(props: ChatViewProps) {
     beginInterruptibleDispatch,
     beginLocalDispatch,
     finishInterruptibleDispatch,
-    flushQueuedInterrupt,
+    markStartDispatchResolved,
     isConnecting,
     isSendBusy,
     isServerThread,
