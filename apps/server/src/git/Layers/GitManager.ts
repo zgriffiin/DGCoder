@@ -2176,6 +2176,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
         const currentBranch = branchStep.name ?? initialStatus.branch;
         const commitAction = isCommitAction(input.action) ? input.action : null;
 
+        yield* Ref.set(currentPhase, Option.some(resolveLocalReviewPhase(input.action)));
         yield* runConfiguredLocalReview(input.cwd, input.action, progress.emit);
 
         const commit = commitAction

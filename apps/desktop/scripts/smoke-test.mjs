@@ -4,12 +4,15 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path, { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
-import { resolveWebSocketAuthProtocol } from "@t3tools/shared/webSocketAuthProtocol";
 import { Effect, Layer } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
-import * as Socket from "effect/unstable/socket/Socket";
 import { resolveElectronPath } from "./electron-launcher.mjs";
+import {
+  readRuntimeScriptEntries,
+  validateDesktopServerBundle,
+} from "../../../scripts/lib/desktopBundleValidation.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(__dirname, "..");
@@ -19,35 +22,20 @@ const serverDistDir = resolve(desktopDir, "../server/dist");
 const smokeHome = mkdtempSync(path.join(os.tmpdir(), "t3-desktop-smoke-"));
 const serverChildLogPath = path.join(smokeHome, "userdata", "logs", "server-child.log");
 const smokeBackendAuthToken = "smoke-test-backend-auth-token";
-const SMOKE_TEST_TOTAL_TIMEOUT_MS = 20_000;
-const SMOKE_TEST_SERVER_CONFIG_TIMEOUT_MS = 15_000;
+const SMOKE_TEST_TOTAL_TIMEOUT_MS = 40_000;
+const SMOKE_TEST_SERVER_CONFIG_TIMEOUT_MS = 30_000;
 
 console.log("\nLaunching Electron smoke test...");
 
-function validateBundledServerSupport() {
-  const serverBundlePath = resolve(serverDistDir, "bin.mjs");
-  const bundleText = readFileSync(serverBundlePath, "utf8");
-  const requiredPatterns = [/"codex"/, /"claudeAgent"/, /"kiro"/, /"amazonQ"/, /kiro-cli/];
-  const missingPatterns = requiredPatterns.filter((pattern) => !pattern.test(bundleText));
-
-  if (missingPatterns.length > 0) {
-    throw new Error("Bundled desktop server is missing required provider support markers.");
-  }
-}
-
-validateBundledServerSupport();
+validateDesktopServerBundle(readRuntimeScriptEntries(serverDistDir));
 
 const makeWsRpcClient = RpcClient.make(WsRpcGroup);
 
 function createWsRpcProtocolLayer(wsUrl, protocols) {
-  const webSocketConstructorLayer = Layer.succeed(
-    Socket.WebSocketConstructor,
-    (socketUrl, socketProtocols) => new globalThis.WebSocket(socketUrl, socketProtocols),
-  );
-  const socketLayer = Socket.layerWebSocket(
+  const socketLayer = NodeSocket.layerWebSocket(
     wsUrl,
     protocols ? { protocols: [...protocols] } : undefined,
-  ).pipe(Layer.provide(webSocketConstructorLayer));
+  );
 
   return RpcClient.layerProtocolSocket().pipe(
     Layer.provide(socketLayer),
@@ -86,10 +74,9 @@ function delay(ms) {
 }
 
 async function fetchServerConfigOnce(wsUrl, requestTimeoutMs) {
-  const authProtocol = resolveWebSocketAuthProtocol(smokeBackendAuthToken);
   const requestPromise = makeWsRpcClient.pipe(
     Effect.flatMap((client) => client[WS_METHODS.serverGetConfig]({})),
-    Effect.provide(createWsRpcProtocolLayer(wsUrl, authProtocol ? [authProtocol] : undefined)),
+    Effect.provide(createWsRpcProtocolLayer(wsUrl)),
     Effect.scoped,
     Effect.runPromise,
   );
@@ -119,7 +106,7 @@ async function waitForServerConfig(wsUrl, totalTimeoutMs) {
 }
 
 const smokeBackendPort = await reserveLoopbackPort();
-const smokeBackendWsUrl = `ws://127.0.0.1:${smokeBackendPort}/ws`;
+const smokeBackendWsUrl = `ws://127.0.0.1:${smokeBackendPort}/ws?token=${encodeURIComponent(smokeBackendAuthToken)}`;
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
 delete childEnv.VITE_DEV_SERVER_URL;

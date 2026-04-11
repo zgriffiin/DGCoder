@@ -6,8 +6,16 @@ export interface BackendLogTailState {
   readonly pendingByStream: Readonly<Record<BackendLogStreamName, string>>;
 }
 
+const MAX_PENDING_CHARS_PER_STREAM = 8_192;
+
 function trimToMaxLines(lines: ReadonlyArray<string>, maxLines: number): ReadonlyArray<string> {
   return lines.length <= maxLines ? lines : lines.slice(-maxLines);
+}
+
+function trimPendingFragment(pending: string): string {
+  return pending.length <= MAX_PENDING_CHARS_PER_STREAM
+    ? pending
+    : pending.slice(-MAX_PENDING_CHARS_PER_STREAM);
 }
 
 function normalizeChunk(chunk: unknown, encoding?: BufferEncoding): string {
@@ -38,7 +46,7 @@ export function appendBackendLogTailChunk(
   const text = `${state.pendingByStream[streamName]}${normalizeChunk(chunk, encoding)}`;
   const normalizedText = text.replace(/\r\n/g, "\n");
   const fragments = normalizedText.split("\n");
-  const pending = fragments.pop() ?? "";
+  const pending = trimPendingFragment(fragments.pop() ?? "");
   const nextLines = fragments.map((line) => `[${streamName}] ${line}`);
 
   return {

@@ -31,6 +31,17 @@ describe("backendLogTail", () => {
     expect(readBackendLogTail(state)).toBe("[stdout] out-1\n[stdout] out-2\n[stderr] err-1");
   });
 
+  it("caps pending fragments so newline-free output cannot grow without bound", () => {
+    const oversizedFragment = "x".repeat(10_000);
+    const state = appendBackendLogTailChunk(
+      createBackendLogTailState(5),
+      "stdout",
+      oversizedFragment,
+    );
+
+    expect(readBackendLogTail(state)).toBe(`[stdout] ${"x".repeat(8_192)}`);
+  });
+
   it("can omit pending lines when requested", () => {
     let state = createBackendLogTailState(5);
     state = appendBackendLogTailChunk(state, "stdout", "line-1\nline-2");

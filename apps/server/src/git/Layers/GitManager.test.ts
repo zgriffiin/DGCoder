@@ -3121,6 +3121,52 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("emits action_failed with the local review phase when CodeRabbit review fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nlocal-review-failure\n");
+      writeProjectConfig(repoDir, {
+        version: 1,
+        localReview: {
+          tool: "coderabbit",
+          command: "node",
+          args: ["-e", "process.stderr.write('review failed\\n'); process.exit(2);"],
+          enforceOn: ["commit"],
+        },
+      });
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+
+      yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+        },
+        {
+          actionId: "action-local-review-failure",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      ).pipe(Effect.flip);
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "action_failed",
+            phase: "commit",
+          }),
+        ]),
+      );
+    }),
+  );
+
   it.effect("create_pr emits only the PR phase when the branch is already pushed", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
