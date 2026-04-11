@@ -68,6 +68,8 @@ describe("ServerSettings qualityGate", () => {
       format: true,
       lint: true,
       typecheck: true,
+      requireIntent: true,
+      requireFunctionalValidation: true,
       maxFileLines: 500,
       maxFunctionLines: 80,
       maxCyclomaticComplexity: 15,
@@ -81,6 +83,8 @@ describe("ServerSettings qualityGate", () => {
           enabled: false,
           format: false,
           lint: false,
+          requireIntent: false,
+          requireFunctionalValidation: true,
           maxFileLines: null,
           maxFunctionLines: 120,
           maxCyclomaticComplexity: null,
@@ -91,6 +95,8 @@ describe("ServerSettings qualityGate", () => {
       format: false,
       lint: false,
       typecheck: true,
+      requireIntent: false,
+      requireFunctionalValidation: true,
       maxFileLines: null,
       maxFunctionLines: 120,
       maxCyclomaticComplexity: null,
@@ -102,12 +108,14 @@ describe("ServerSettings qualityGate", () => {
       decodeServerSettingsPatch({
         qualityGate: {
           format: false,
+          requireIntent: false,
           maxFileLines: null,
         },
       }),
     ).toEqual({
       qualityGate: {
         format: false,
+        requireIntent: false,
         maxFileLines: null,
       },
     });

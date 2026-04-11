@@ -10,6 +10,7 @@ import type {
   GitActionProgressEvent,
   GitPreparePullRequestThreadInput,
   ModelSelection,
+  QualityGateSettings,
   ThreadId,
 } from "@t3tools/contracts";
 
@@ -583,6 +584,8 @@ function runStackedAction(
     action: "commit" | "push" | "create_pr" | "commit_push" | "commit_push_pr";
     actionId?: string;
     commitMessage?: string;
+    changeIntent?: string;
+    validationCommands?: readonly string[];
     featureBranch?: boolean;
     filePaths?: readonly string[];
   },
@@ -612,6 +615,7 @@ function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   textGeneration?: Partial<FakeGitTextGeneration>;
   setupScriptRunner?: ProjectSetupScriptRunnerShape;
+  qualityGate?: Partial<QualityGateSettings>;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
@@ -619,7 +623,13 @@ function makeManager(input?: {
     prefix: "t3-git-manager-test-",
   });
 
-  const serverSettingsLayer = ServerSettingsService.layerTest();
+  const serverSettingsLayer = ServerSettingsService.layerTest({
+    qualityGate: {
+      requireIntent: false,
+      requireFunctionalValidation: false,
+      ...input?.qualityGate,
+    },
+  });
 
   const gitCoreLayer = GitCoreLive.pipe(
     Layer.provideMerge(NodeServices.layer),
@@ -1152,6 +1162,59 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("appends required intent and validation proof before creating a commit", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nproof\n");
+
+      const { manager } = yield* makeManager({
+        qualityGate: {
+          requireIntent: true,
+          requireFunctionalValidation: true,
+        },
+      });
+      const validationCommand = `node -e "process.stdout.write('validation ok')"`;
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        changeIntent: "Tie each commit to a clear why.",
+        validationCommands: [validationCommand],
+      });
+
+      expect(result.commit.status).toBe("created");
+      const commitBody = yield* runGit(repoDir, ["log", "-1", "--pretty=%B"]).pipe(
+        Effect.map((commitResult) => commitResult.stdout.trim()),
+      );
+      expect(commitBody).toContain("Intent:");
+      expect(commitBody).toContain("Tie each commit to a clear why.");
+      expect(commitBody).toContain("Validation:");
+      expect(commitBody).toContain(validationCommand);
+    }),
+  );
+
+  it.effect("rejects commit actions that omit required intent or validation proof", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nmissing-proof\n");
+
+      const { manager } = yield* makeManager({
+        qualityGate: {
+          requireIntent: true,
+          requireFunctionalValidation: true,
+        },
+      });
+      const failure = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+      }).pipe(Effect.flip);
+
+      expect(failure._tag).toBe("GitManagerError");
+      expect(failure.message).toContain("Missing required change proof");
+    }),
+  );
+
   it.effect("commits only selected files when filePaths is provided", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -1174,6 +1237,36 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
       expect(statusStdout).toContain("b.txt");
       expect(statusStdout).not.toContain("a.txt");
+    }),
+  );
+
+  it.effect("blocks pushes when outgoing commits are missing required proof", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\npush-proof\n");
+      yield* runGit(repoDir, ["add", "README.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "feat: missing proof"]);
+
+      const { manager } = yield* makeManager({
+        qualityGate: {
+          requireIntent: true,
+          requireFunctionalValidation: true,
+        },
+      });
+      const failure = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "push",
+      }).pipe(Effect.flip);
+
+      expect(failure._tag).toBe("GitManagerError");
+      expect(failure.message).toContain(
+        "Push blocked because outgoing commits are missing required change proof.",
+      );
+      expect(failure.message).toContain("feat: missing proof");
     }),
   );
 

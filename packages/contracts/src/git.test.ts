@@ -67,10 +67,14 @@ describe("GitRunStackedActionInput", () => {
       actionId: "action-1",
       cwd: "/repo",
       action: "create_pr",
+      changeIntent: "Keep outgoing changes tied to a clear why.",
+      validationCommands: ["bun run test apps/server"],
     });
 
     expect(parsed.actionId).toBe("action-1");
     expect(parsed.action).toBe("create_pr");
+    expect(parsed.changeIntent).toBe("Keep outgoing changes tied to a clear why.");
+    expect(parsed.validationCommands).toEqual(["bun run test apps/server"]);
   });
 });
 

@@ -7,6 +7,14 @@ import type {
 export type GitActionIconName = "commit" | "push" | "pr";
 
 export type GitDialogAction = "commit" | "push" | "create_pr";
+export type CommitDialogAction = "commit" | "commit_push" | "commit_push_pr";
+
+export interface CommitDialogCopy {
+  title: string;
+  description: string;
+  submitLabel: string;
+  submitOnNewBranchLabel: string;
+}
 
 export interface GitActionMenuItem {
   id: "commit" | "push" | "pr";
@@ -40,6 +48,7 @@ export type DefaultBranchConfirmableAction =
 export function buildGitActionProgressStages(input: {
   action: GitStackedAction;
   hasCustomCommitMessage: boolean;
+  hasFunctionalValidation: boolean;
   hasWorkingTreeChanges: boolean;
   pushTarget?: string;
   featureBranch?: boolean;
@@ -61,11 +70,15 @@ export function buildGitActionProgressStages(input: {
   }
 
   const shouldIncludeCommitStages = input.action === "commit" || input.hasWorkingTreeChanges;
-  const commitStages = !shouldIncludeCommitStages
+  const baseCommitStages = !shouldIncludeCommitStages
     ? []
     : input.hasCustomCommitMessage
       ? ["Committing..."]
       : ["Generating commit message...", "Committing..."];
+  const commitStages =
+    input.hasFunctionalValidation && baseCommitStages.length > 0
+      ? [...baseCommitStages.slice(0, -1), "Running validation...", "Committing..."]
+      : baseCommitStages;
   if (input.action === "commit") {
     return [...branchStages, ...commitStages];
   }
@@ -287,6 +300,50 @@ export function requiresDefaultBranchConfirmation(
     action === "commit_push" ||
     action === "commit_push_pr"
   );
+}
+
+export function isCommitDialogAction(action: GitStackedAction): action is CommitDialogAction {
+  return action === "commit" || action === "commit_push" || action === "commit_push_pr";
+}
+
+export function resolveCommitDialogCopy(input: {
+  action: CommitDialogAction;
+  requireIntent: boolean;
+  requireFunctionalValidation: boolean;
+}): CommitDialogCopy {
+  const proofRequirements =
+    input.requireIntent && input.requireFunctionalValidation
+      ? "Record the intent and the functional validation commands before continuing."
+      : input.requireIntent
+        ? "Record the intent for this change before continuing."
+        : input.requireFunctionalValidation
+          ? "List the functional validation commands before continuing."
+          : "Review the change details before continuing.";
+
+  if (input.action === "commit_push_pr") {
+    return {
+      title: "Commit, push & create PR",
+      description: `${proofRequirements} Leave the commit message blank to auto-generate one.`,
+      submitLabel: "Commit, push & create PR",
+      submitOnNewBranchLabel: "Run on new branch",
+    };
+  }
+
+  if (input.action === "commit_push") {
+    return {
+      title: "Commit & push",
+      description: `${proofRequirements} Leave the commit message blank to auto-generate one.`,
+      submitLabel: "Commit & push",
+      submitOnNewBranchLabel: "Run on new branch",
+    };
+  }
+
+  return {
+    title: "Commit changes",
+    description: `${proofRequirements} Leave the commit message blank to auto-generate one.`,
+    submitLabel: "Commit",
+    submitOnNewBranchLabel: "Commit on new branch",
+  };
 }
 
 export function resolveDefaultBranchActionDialogCopy(input: {

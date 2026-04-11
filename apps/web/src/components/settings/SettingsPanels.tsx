@@ -1655,6 +1655,37 @@ export function GeneralSettingsPanel() {
           }
         />
         <SettingsRow
+          title="Commit / push proof"
+          description="Require commit-like actions to capture why the change exists and which functional commands proved it before commit or push."
+        >
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {(
+              [
+                ["requireIntent", "Intent", "Require a clear why for commit-related actions."],
+                [
+                  "requireFunctionalValidation",
+                  "Functional validation",
+                  "Require runnable commands that prove the intended behavior.",
+                ],
+              ] as const
+            ).map(([key, label, description]) => (
+              <label
+                key={key}
+                className="flex items-center justify-between gap-3 rounded-xl border bg-muted/20 px-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium text-foreground">{label}</span>
+                  <span className="block text-[11px] text-muted-foreground">{description}</span>
+                </span>
+                <Switch
+                  checked={qualityGate[key]}
+                  onCheckedChange={(checked) => updateQualityGate({ [key]: Boolean(checked) })}
+                />
+              </label>
+            ))}
+          </div>
+        </SettingsRow>
+        <SettingsRow
           title="Project checks"
           description="Use non-mutating repository commands to catch formatting, lint, and type errors."
         >

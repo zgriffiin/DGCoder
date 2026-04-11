@@ -168,6 +168,8 @@ export function gitRunStackedActionMutationOptions(input: {
       actionId,
       action,
       commitMessage,
+      changeIntent,
+      validationCommands,
       featureBranch,
       filePaths,
       onProgress,
@@ -175,6 +177,8 @@ export function gitRunStackedActionMutationOptions(input: {
       actionId: string;
       action: GitStackedAction;
       commitMessage?: string;
+      changeIntent?: string;
+      validationCommands?: string[];
       featureBranch?: boolean;
       filePaths?: string[];
       onProgress?: (event: GitActionProgressEvent) => void;
@@ -186,6 +190,8 @@ export function gitRunStackedActionMutationOptions(input: {
           actionId,
           cwd: input.cwd,
           ...(commitMessage ? { commitMessage } : {}),
+          ...(changeIntent ? { changeIntent } : {}),
+          ...(validationCommands && validationCommands.length > 0 ? { validationCommands } : {}),
           ...(featureBranch ? { featureBranch: true } : {}),
           ...(filePaths && filePaths.length > 0 ? { filePaths } : {}),
         },
