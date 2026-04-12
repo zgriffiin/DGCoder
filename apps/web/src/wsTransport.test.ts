@@ -1,4 +1,5 @@
 import { DEFAULT_SERVER_SETTINGS, WS_METHODS } from "@t3tools/contracts";
+import { Duration, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -413,6 +414,59 @@ describe("WsTransport", () => {
     await transport.dispose();
   });
 
+  it("times out unary requests when the server never responds", async () => {
+    const transport = new WsTransport("ws://localhost:3020");
+
+    const requestPromise = transport.request(
+      (client) =>
+        client[WS_METHODS.serverUpsertKeybinding]({
+          command: "terminal.toggle",
+          key: "ctrl+k",
+        }),
+      { timeout: Option.some(Duration.millis(25)) },
+    );
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    const socket = getSocket();
+    socket.open();
+
+    await waitFor(() => {
+      expect(socket.sent).toHaveLength(1);
+    });
+
+    await expect(requestPromise).rejects.toThrow("WebSocket RPC request timed out.");
+    await transport.dispose();
+  }, 2_000);
+
+  it("rejects in-flight unary requests when reconnect closes the active session", async () => {
+    const transport = new WsTransport("ws://localhost:3020");
+
+    const requestPromise = transport.request((client) =>
+      client[WS_METHODS.serverUpsertKeybinding]({
+        command: "terminal.toggle",
+        key: "ctrl+k",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    const socket = getSocket();
+    socket.open();
+
+    await waitFor(() => {
+      expect(socket.sent).toHaveLength(1);
+    });
+
+    await transport.reconnect();
+    await expect(requestPromise).rejects.toThrow("Transport session closed");
+    await transport.dispose();
+  });
+
   it("delivers stream chunks to subscribers", async () => {
     const transport = new WsTransport("ws://localhost:3020");
     const listener = vi.fn();
@@ -708,12 +762,16 @@ describe("WsTransport", () => {
       disposed: false,
       session: {
         clientScope: {} as never,
+        resolveClosed: vi.fn(() => {
+          callOrder.push("closed:resolved");
+        }),
         runtime,
       },
       closeSession: (
         WsTransport.prototype as unknown as {
           closeSession: (session: {
             clientScope: unknown;
+            resolveClosed: () => void;
             runtime: { dispose: () => Promise<void>; runPromise: () => Promise<void> };
           }) => Promise<void>;
         }
@@ -732,7 +790,7 @@ describe("WsTransport", () => {
       expect(runtime.dispose).toHaveBeenCalledTimes(1);
     });
 
-    expect(callOrder).toEqual(["close:start", "close:done", "runtime:dispose"]);
+    expect(callOrder).toEqual(["closed:resolved", "close:start", "close:done", "runtime:dispose"]);
   });
 
   it("propagates OTLP trace ids for ws transport requests when client tracing is enabled", async () => {
