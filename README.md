@@ -28,12 +28,22 @@ Recent work in this fork includes:
 
 - Kiro and Amazon Q CLI-agent adapters.
 - Provider status/settings for Codex, Claude, Kiro, and Amazon Q.
+- Kiro model selection now exposes the CLI-discovered built-in model catalog and passes explicit
+  `--model <slug>` values to `kiro-cli` instead of always falling back to auto/default behavior.
 - Orchestration event recovery fixes for session restart and reconnect flows.
 - Resume-triggered snapshot recovery on focus/online/visibility changes, so stale long-running
   sessions re-sync without a full app restart.
 - Session completion and diff rendering fixes for smoother long-running threads.
+- UI liveness now uses a hybrid truth model: durable orchestration history for content plus a
+  volatile per-thread progress channel for active status, timers, stop affordances, and recovery.
+- Active provider work is now split from post-run work, so the UI can distinguish `Agent working`
+  from post-run checks like checkpoint capture and quality gate execution.
+- WebSocket replay/snapshot recovery now has enforced request timeouts, reconnect fallback, and
+  active-thread polling so stalled recovery paths converge without requiring a browser reload.
 - Snapshot bootstrap now fetches only the latest turn per thread at the SQL layer instead of
   scanning all historical turns in memory.
+- Timeline virtualization now measures real browser typography instead of relying only on static
+  font constants, which stabilizes row heights across platforms and browser engines.
 - Repository identity is now persisted into projection state, so snapshot generation no longer
   shells out to Git on cache misses.
 - Orchestration ingress now uses bounded command and event queues instead of unbounded buffers.
@@ -47,6 +57,8 @@ Recent work in this fork includes:
   keybindings.
 - Git status subscriptions now fan out per repository instead of waking all subscribers on
   unrelated repo updates.
+- Desktop shell failures now swap to an explicit fatal fallback page with log-path diagnostics
+  instead of leaving a silent blank white window after renderer or page-load failures.
 - Compact work-log rendering with a detail popup for long tool/output entries.
 - Beans workflow management from the UI.
 - A post-agent quality gate that records format, lint, typecheck, and code-shape failures.
@@ -130,6 +142,15 @@ dialog without expanding the entire timeline.
 This fork has focused on keeping the UI responsive and predictable while provider
 sessions run, reconnect, or recover from partial streams. Recent fixes include:
 
+- Kiro now reports its documented built-in model list through the provider API, and explicit model
+  selection is forwarded to `kiro-cli` instead of being silently ignored.
+- The UI now tracks live thread progress separately from durable orchestration history, which keeps
+  active status, stop buttons, timers, and waiting/recovery states aligned with actual provider
+  runtime truth.
+- Active model output and post-run work are now separate phases, so the UI does not keep showing a
+  generic working state after provider output has already finished.
+- Replay and snapshot recovery requests now enforce timeouts, reject stale in-flight work on
+  reconnect, and fall back to active-thread polling instead of deadlocking the recovery path.
 - Focus, online, pageshow, and visible-tab transitions now trigger debounced snapshot recovery,
   so the UI resyncs after machine sleep, tab suspension, or missed live events.
 - Provider session updates now reconcile the latest turn when a runtime settles, so a
@@ -160,8 +181,12 @@ sessions run, reconnect, or recover from partial streams. Recent fixes include:
   conversation diffs are still available, but only through an explicit scope.
 - Diff rendering is unmounted when the diff panel closes, and the diff worker pool/cache
   are capped to reduce UI-thread and memory pressure during large patches.
+- Timeline row estimation now measures actual browser typography, which reduces virtualization
+  drift across Windows and other font/rendering environments.
 - Long provider work-log entries stay compact until opened in a detail dialog, avoiding
   oversized timeline rows during heavy tool output.
+- Desktop renderer, preload, page-load, and child-process failures now log explicit shell-side
+  diagnostics and swap to a visible fatal fallback page instead of a silent white window.
 
 ### Beans
 
