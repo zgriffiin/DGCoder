@@ -17,6 +17,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ResolvedKeybindingRule,
+  THREAD_PROGRESS_WS_METHODS,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
@@ -68,6 +69,10 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ThreadProgressTracker,
+  type ThreadProgressTrackerShape,
+} from "./orchestration/Services/ThreadProgressTracker.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import {
   ProviderRegistry,
@@ -291,6 +296,7 @@ const buildAppUnderTest = (options?: {
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
     browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
+    threadProgressTracker?: Partial<ThreadProgressTrackerShape>;
     serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
     serverEnvironment?: Partial<ServerEnvironmentShape>;
@@ -333,6 +339,21 @@ const buildAppUnderTest = (options?: {
       ...options?.layers?.gitManager,
     });
     const gitStatusBroadcasterLayer = GitStatusBroadcasterLive.pipe(Layer.provide(gitManagerLayer));
+    const observabilityAndProgressLayer = Layer.mergeAll(
+      Layer.mock(BrowserTraceCollector)({
+        record: () => Effect.void,
+        ...options?.layers?.browserTraceCollector,
+      }),
+      Layer.mock(ThreadProgressTracker)({
+        start: () => Effect.void,
+        getSnapshot: () => Effect.succeed({}),
+        streamSnapshots: Stream.empty,
+        markPostRunStageStart: () => Effect.void,
+        markPostRunStageEnd: () => Effect.void,
+        markThreadPhase: () => Effect.void,
+        ...options?.layers?.threadProgressTracker,
+      }),
+    );
 
     const appLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -419,12 +440,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.checkpointDiffQuery,
         }),
       ),
-      Layer.provide(
-        Layer.mock(BrowserTraceCollector)({
-          record: () => Effect.void,
-          ...options?.layers?.browserTraceCollector,
-        }),
-      ),
+      Layer.provide(observabilityAndProgressLayer),
       Layer.provide(
         Layer.mock(ServerLifecycleEvents)({
           publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
@@ -3048,6 +3064,85 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
       assertInclude(result.failure.message, "Failed to load orchestration snapshot");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc threadProgress.getSnapshot", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.makeUnsafe("thread-progress-1");
+      const snapshot = {
+        [threadId]: {
+          threadId,
+          phase: "post_processing" as const,
+          activeTurnId: null,
+          postRunStages: ["quality_gate"] as const,
+          lastRuntimeEventType: "turn.completed",
+          statusMessage: "Agent finished. Running quality gate.",
+          updatedAt: "2026-04-12T00:00:00.000Z",
+          source: "provider-runtime" as const,
+        },
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          threadProgressTracker: {
+            getSnapshot: () => Effect.succeed(snapshot),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[THREAD_PROGRESS_WS_METHODS.getSnapshot]({})),
+      );
+
+      assert.deepEqual(result, snapshot);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "routes websocket rpc subscribeThreadProgress with current snapshot then live updates",
+    () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe("thread-progress-stream");
+        const initialSnapshot = {
+          threadId,
+          phase: "agent_running" as const,
+          activeTurnId: null,
+          postRunStages: [],
+          lastRuntimeEventType: "turn.started",
+          statusMessage: "Agent working.",
+          updatedAt: "2026-04-12T00:00:00.000Z",
+          source: "provider-runtime" as const,
+        };
+        const liveSnapshot = {
+          ...initialSnapshot,
+          phase: "post_processing" as const,
+          postRunStages: ["quality_gate"] as const,
+          statusMessage: "Agent finished. Running quality gate.",
+          updatedAt: "2026-04-12T00:00:01.000Z",
+        };
+
+        yield* buildAppUnderTest({
+          layers: {
+            threadProgressTracker: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  [threadId]: initialSnapshot,
+                }),
+              streamSnapshots: Stream.make(liveSnapshot),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeThreadProgress]({}).pipe(Stream.take(2), Stream.runCollect),
+          ),
+        );
+
+        assert.deepEqual(Array.from(result), [initialSnapshot, liveSnapshot]);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc terminal methods", () =>

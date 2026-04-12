@@ -1,4 +1,9 @@
-import { type EnvironmentId, type MessageId, type TurnId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type MessageId,
+  type ThreadProgressPhase,
+  type TurnId,
+} from "@t3tools/contracts";
 import {
   memo,
   useCallback,
@@ -63,6 +68,10 @@ import {
 } from "./userMessageTerminalContexts";
 import { useAuthenticatedAssetUrl } from "~/hooks/useAuthenticatedAssetUrl";
 import {
+  measureTimelineTypographyMetrics,
+  type TimelineTypographyMetrics,
+} from "../timelineHeight";
+import {
   Dialog,
   DialogDescription,
   DialogHeader,
@@ -118,9 +127,15 @@ function TimelineAttachmentPreview({
 
 interface MessagesTimelineProps {
   hasMessages: boolean;
-  isWorking: boolean;
+  progressState: {
+    phase: ThreadProgressPhase;
+    label: string;
+    statusMessage: string | null;
+    startedAt: string | null;
+    showTimer: boolean;
+  } | null;
   activeTurnInProgress: boolean;
-  activeTurnStartedAt: string | null;
+  checkpointActionsDisabled: boolean;
   scrollContainer: HTMLDivElement | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
@@ -154,9 +169,9 @@ interface MessagesTimelineProps {
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
-  isWorking,
+  progressState,
   activeTurnInProgress,
-  activeTurnStartedAt,
+  checkpointActionsDisabled,
   scrollContainer,
   timelineEntries,
   completionDividerBeforeEntryId,
@@ -179,6 +194,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+  const [timelineTypographyMetrics, setTimelineTypographyMetrics] =
+    useState<TimelineTypographyMetrics | null>(null);
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -203,17 +220,58 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return () => {
       observer.disconnect();
     };
-  }, [hasMessages, isWorking]);
+  }, [hasMessages, progressState]);
+
+  useLayoutEffect(() => {
+    const timelineRoot = timelineRootRef.current;
+    if (!timelineRoot) return;
+
+    let cancelled = false;
+    const updateMetrics = () => {
+      const nextMetrics = measureTimelineTypographyMetrics(timelineRoot);
+      if (cancelled) return;
+      setTimelineTypographyMetrics((previousMetrics) => {
+        if (
+          previousMetrics &&
+          nextMetrics &&
+          Math.abs(
+            (previousMetrics.userMonoAvgCharWidthPx ?? 0) -
+              (nextMetrics.userMonoAvgCharWidthPx ?? 0),
+          ) < 0.05 &&
+          Math.abs((previousMetrics.userLineHeightPx ?? 0) - (nextMetrics.userLineHeightPx ?? 0)) <
+            0.05
+        ) {
+          return previousMetrics;
+        }
+        return nextMetrics;
+      });
+    };
+
+    updateMetrics();
+
+    const fontFaceSet = "fonts" in document ? document.fonts : null;
+    const onFontsLoaded = () => {
+      updateMetrics();
+    };
+    fontFaceSet?.addEventListener?.("loadingdone", onFontsLoaded);
+    void fontFaceSet?.ready.then(() => {
+      updateMetrics();
+    });
+
+    return () => {
+      cancelled = true;
+      fontFaceSet?.removeEventListener?.("loadingdone", onFontsLoaded);
+    };
+  }, []);
 
   const rows = useMemo(
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
         completionDividerBeforeEntryId,
-        isWorking,
-        activeTurnStartedAt,
+        workingState: progressState,
       }),
-    [timelineEntries, completionDividerBeforeEntryId, isWorking, activeTurnStartedAt],
+    [timelineEntries, completionDividerBeforeEntryId, progressState],
   );
 
   const firstUnvirtualizedRowIndex = useMemo(() => {
@@ -221,7 +279,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (!activeTurnInProgress) return firstTailRowIndex;
 
     const turnStartedAtMs =
-      typeof activeTurnStartedAt === "string" ? Date.parse(activeTurnStartedAt) : Number.NaN;
+      typeof progressState?.startedAt === "string"
+        ? Date.parse(progressState.startedAt)
+        : Number.NaN;
     let firstCurrentTurnRowIndex = -1;
     if (!Number.isNaN(turnStartedAtMs)) {
       firstCurrentTurnRowIndex = rows.findIndex((row) => {
@@ -252,7 +312,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
 
     return Math.min(firstCurrentTurnRowIndex, firstTailRowIndex);
-  }, [activeTurnInProgress, activeTurnStartedAt, rows]);
+  }, [activeTurnInProgress, progressState?.startedAt, rows]);
 
   const virtualizedRowCount = clamp(firstUnvirtualizedRowIndex, {
     minimum: 0,
@@ -276,6 +336,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return estimateMessagesTimelineRowHeight(row, {
         expandedWorkGroups,
         timelineWidthPx,
+        typographyMetrics: timelineTypographyMetrics,
         turnDiffSummaryByAssistantMessageId,
       });
     },
@@ -286,7 +347,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   useEffect(() => {
     if (timelineWidthPx === null) return;
     rowVirtualizer.measure();
-  }, [rowVirtualizer, timelineWidthPx]);
+  }, [rowVirtualizer, timelineTypographyMetrics, timelineWidthPx]);
   useEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
       const viewportHeight = instance.scrollRect?.height ?? 0;
@@ -460,7 +521,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         type="button"
                         size="xs"
                         variant="outline"
-                        disabled={isRevertingCheckpoint || isWorking}
+                        disabled={isRevertingCheckpoint || checkpointActionsDisabled}
                         onClick={() => onRevertUserMessage(row.message.id)}
                         title="Revert to this message"
                       >
@@ -583,23 +644,34 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "working" && (
         <div className="py-0.5 pl-1.5">
           <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70">
-            <span className="inline-flex items-center gap-[3px]">
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
-            </span>
+            {row.showTimer ? (
+              <span className="inline-flex items-center gap-[3px]">
+                <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30" />
+                <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:200ms]" />
+                <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:400ms]" />
+              </span>
+            ) : (
+              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/35" />
+            )}
             <span>
-              {row.createdAt
-                ? `Working for ${formatWorkingTimer(row.createdAt, nowIso) ?? "0s"}`
-                : "Working..."}
+              {row.showTimer
+                ? row.createdAt
+                  ? `${row.label} for ${formatWorkingTimer(row.createdAt, nowIso) ?? "0s"}`
+                  : row.label
+                : row.label}
             </span>
           </div>
+          {row.statusMessage && row.statusMessage !== row.label ? (
+            <p className="pl-[18px] pt-1 text-[10px] leading-4 text-muted-foreground/55">
+              {row.statusMessage}
+            </p>
+          ) : null}
         </div>
       )}
     </div>
   );
 
-  if (!hasMessages && !isWorking) {
+  if (!hasMessages && !progressState) {
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-muted-foreground/30">

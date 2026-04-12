@@ -44,12 +44,15 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       dispatchCommand: rpcClient.orchestration.dispatchCommand,
       getTurnDiff: rpcClient.orchestration.getTurnDiff,
       getFullThreadDiff: rpcClient.orchestration.getFullThreadDiff,
+      getThreadProgressSnapshot: rpcClient.orchestration.getThreadProgressSnapshot,
       replayEvents: (fromSequenceExclusive) =>
         rpcClient.orchestration
           .replayEvents({ fromSequenceExclusive })
           .then((events) => [...events]),
       onDomainEvent: (callback, options) =>
         rpcClient.orchestration.onDomainEvent(callback, options),
+      onThreadProgress: (callback, options) =>
+        rpcClient.orchestration.onThreadProgress(callback, options),
     },
   };
 }

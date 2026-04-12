@@ -21,6 +21,7 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { CheckpointReactor, type CheckpointReactorShape } from "../Services/CheckpointReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
+import { ThreadProgressTracker } from "../Services/ThreadProgressTracker.ts";
 import { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import { OrchestrationDispatchError } from "../Errors.ts";
 import { isGitRepository } from "../../git/Utils.ts";
@@ -68,6 +69,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
   const receiptBus = yield* RuntimeReceiptBus;
+  const threadProgressTracker = yield* ThreadProgressTracker;
   const workspaceEntries = yield* WorkspaceEntries;
 
   const appendRevertFailureActivity = (input: {
@@ -373,7 +375,14 @@ const make = Effect.gen(function* () {
         ? existingPlaceholder.checkpointTurnCount
         : currentTurnCount + 1;
 
-      yield* captureAndDispatchCheckpoint({
+      yield* threadProgressTracker.markPostRunStageStart({
+        threadId: thread.id,
+        turnId,
+        stage: "checkpoint_capture",
+        updatedAt: event.createdAt,
+        lastRuntimeEventType: event.type,
+      });
+      const checkpointCaptureExit = yield* captureAndDispatchCheckpoint({
         threadId: thread.id,
         turnId,
         thread,
@@ -382,7 +391,18 @@ const make = Effect.gen(function* () {
         status: checkpointStatusFromRuntime(event.payload.state),
         assistantMessageId: undefined,
         createdAt: event.createdAt,
+      }).pipe(Effect.exit);
+      yield* threadProgressTracker.markPostRunStageEnd({
+        threadId: thread.id,
+        turnId,
+        stage: "checkpoint_capture",
+        updatedAt: event.createdAt,
+        fallbackPhase: checkpointCaptureExit._tag === "Success" ? "ready" : "error",
+        lastRuntimeEventType: event.type,
       });
+      if (checkpointCaptureExit._tag === "Failure") {
+        return yield* Effect.failCause(checkpointCaptureExit.cause);
+      }
     },
   );
 
@@ -436,7 +456,14 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* captureAndDispatchCheckpoint({
+    yield* threadProgressTracker.markPostRunStageStart({
+      threadId,
+      turnId,
+      stage: "checkpoint_capture",
+      updatedAt: event.payload.completedAt,
+      lastRuntimeEventType: event.type,
+    });
+    const checkpointCaptureExit = yield* captureAndDispatchCheckpoint({
       threadId,
       turnId,
       thread,
@@ -445,7 +472,18 @@ const make = Effect.gen(function* () {
       status: "ready",
       assistantMessageId: event.payload.assistantMessageId ?? undefined,
       createdAt: event.payload.completedAt,
+    }).pipe(Effect.exit);
+    yield* threadProgressTracker.markPostRunStageEnd({
+      threadId,
+      turnId,
+      stage: "checkpoint_capture",
+      updatedAt: event.payload.completedAt,
+      fallbackPhase: checkpointCaptureExit._tag === "Success" ? "ready" : "error",
+      lastRuntimeEventType: event.type,
     });
+    if (checkpointCaptureExit._tag === "Failure") {
+      return yield* Effect.failCause(checkpointCaptureExit.cause);
+    }
   });
 
   const ensurePreTurnBaselineFromTurnStart = Effect.fn("ensurePreTurnBaselineFromTurnStart")(

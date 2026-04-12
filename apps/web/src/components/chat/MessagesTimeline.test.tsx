@@ -55,9 +55,9 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
+        progressState={null}
         activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        checkpointActionsDisabled={false}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -109,9 +109,9 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
+        progressState={null}
         activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        checkpointActionsDisabled={false}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -153,9 +153,9 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
+        progressState={null}
         activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        checkpointActionsDisabled={false}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -192,5 +192,81 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Quality gate failed");
     expect(markup).toContain("Open full work log detail");
+  });
+
+  it("renders explicit post-run progress copy", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        progressState={{
+          phase: "post_processing",
+          label: "Post-run checks",
+          statusMessage: "Agent finished. Running quality gate.",
+          startedAt: "2026-03-17T19:12:28.000Z",
+          showTimer: true,
+        }}
+        activeTurnInProgress
+        checkpointActionsDisabled
+        scrollContainer={null}
+        timelineEntries={[]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        activeThreadEnvironmentId={ACTIVE_THREAD_ENVIRONMENT_ID}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Post-run checks");
+    expect(markup).toContain("Agent finished. Running quality gate.");
+  });
+
+  it("renders waiting input without an active work timer", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        progressState={{
+          phase: "waiting_user_input",
+          label: "Waiting for input",
+          statusMessage: null,
+          startedAt: "2026-03-17T19:12:28.000Z",
+          showTimer: false,
+        }}
+        activeTurnInProgress
+        checkpointActionsDisabled={false}
+        scrollContainer={null}
+        timelineEntries={[]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        activeThreadEnvironmentId={ACTIVE_THREAD_ENVIRONMENT_ID}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Waiting for input");
+    expect(markup).not.toContain("Waiting for input for");
   });
 });

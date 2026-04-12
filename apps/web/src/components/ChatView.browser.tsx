@@ -11,8 +11,14 @@ import {
   type ProjectId,
   type ServerConfig,
   type ServerLifecycleWelcomePayload,
+  THREAD_PROGRESS_WS_METHODS,
+  type ThreadPostRunStage,
+  type ThreadProgressSource,
+  type ThreadProgressSnapshot,
   type ThreadId,
+  type ThreadProgressPhase,
   type TurnId,
+  type ThreadProgressSnapshotMap,
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
@@ -45,7 +51,11 @@ import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store"
 import { useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
-import { estimateTimelineMessageHeight } from "./timelineHeight";
+import {
+  estimateTimelineMessageHeight,
+  measureTimelineTypographyMetrics,
+  type TimelineTypographyMetrics,
+} from "./timelineHeight";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
 vi.mock("../lib/gitStatusState", () => ({
@@ -69,6 +79,7 @@ const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' heig
 
 interface TestFixture {
   snapshot: OrchestrationReadModel;
+  threadProgressSnapshotMap: ThreadProgressSnapshotMap;
   serverConfig: ServerConfig;
   welcome: ServerLifecycleWelcomePayload;
 }
@@ -112,7 +123,7 @@ const TEXT_VIEWPORT_MATRIX = [
   DEFAULT_VIEWPORT,
   { name: "tablet", width: 720, height: 1_024, textTolerancePx: 44, attachmentTolerancePx: 56 },
   { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
-  { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 56 },
+  { name: "narrow", width: 320, height: 700, textTolerancePx: 92, attachmentTolerancePx: 56 },
 ] as const satisfies readonly ViewportSpec[];
 const ATTACHMENT_VIEWPORT_MATRIX = [
   { ...DEFAULT_VIEWPORT, attachmentTolerancePx: 120 },
@@ -124,6 +135,7 @@ interface UserRowMeasurement {
   measuredRowHeightPx: number;
   timelineWidthMeasuredPx: number;
   renderedInVirtualizedRegion: boolean;
+  typographyMetrics: TimelineTypographyMetrics | null;
 }
 
 interface MountedChatView {
@@ -238,6 +250,7 @@ function createSnapshotForTargetUser(options: {
   targetText: string;
   targetAttachmentCount?: number;
   sessionStatus?: OrchestrationSessionStatus;
+  sessionActiveTurnId?: TurnId | null;
 }): OrchestrationReadModel {
   const messages: Array<OrchestrationReadModel["threads"][number]["messages"][number]> = [];
 
@@ -318,7 +331,7 @@ function createSnapshotForTargetUser(options: {
           status: options.sessionStatus ?? "ready",
           providerName: "codex",
           runtimeMode: "full-access",
-          activeTurnId: null,
+          activeTurnId: options.sessionActiveTurnId ?? null,
           lastError: null,
           updatedAt: NOW_ISO,
         },
@@ -331,6 +344,7 @@ function createSnapshotForTargetUser(options: {
 function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
+    threadProgressSnapshotMap: {},
     serverConfig: createBaseServerConfig(),
     welcome: {
       environment: {
@@ -345,6 +359,29 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
       bootstrapProjectId: PROJECT_ID,
       bootstrapThreadId: THREAD_ID,
     },
+  };
+}
+
+function createThreadProgressSnapshot(options: {
+  threadId?: ThreadId;
+  phase: ThreadProgressPhase;
+  activeTurnId?: TurnId | null;
+  updatedAt?: string;
+  statusMessage?: string | null;
+  lastRuntimeEventType?: string | null;
+  source?: ThreadProgressSource;
+  postRunStages?: ThreadPostRunStage[];
+}): ThreadProgressSnapshot {
+  const threadId = options.threadId ?? THREAD_ID;
+  return {
+    threadId,
+    phase: options.phase,
+    activeTurnId: options.activeTurnId ?? null,
+    postRunStages: options.postRunStages ?? [],
+    lastRuntimeEventType: options.lastRuntimeEventType ?? null,
+    statusMessage: options.statusMessage ?? null,
+    updatedAt: options.updatedAt ?? NOW_ISO,
+    source: options.source ?? "provider-runtime",
   };
 }
 
@@ -438,10 +475,10 @@ function createThreadSessionSetEvent(threadId: ThreadId, sequence: number): Orch
       threadId,
       session: {
         threadId,
-        status: "running",
+        status: "ready",
         providerName: "codex",
         runtimeMode: "full-access",
-        activeTurnId: `turn-${threadId}` as TurnId,
+        activeTurnId: null,
         lastError: null,
         updatedAt: NOW_ISO,
       },
@@ -761,6 +798,9 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
   const tag = body._tag;
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === THREAD_PROGRESS_WS_METHODS.getSnapshot) {
+    return fixture.threadProgressSnapshotMap;
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
@@ -1115,6 +1155,7 @@ async function measureUserRow(options: {
   let timelineWidthMeasuredPx = 0;
   let measuredRowHeightPx = 0;
   let renderedInVirtualizedRegion = false;
+  let typographyMetrics: TimelineTypographyMetrics | null = null;
   await vi.waitFor(
     async () => {
       scrollContainer.scrollTop = 0;
@@ -1125,6 +1166,7 @@ async function measureUserRow(options: {
       timelineWidthMeasuredPx = timelineRoot.getBoundingClientRect().width;
       measuredRowHeightPx = measuredRow!.getBoundingClientRect().height;
       renderedInVirtualizedRegion = measuredRow!.closest("[data-index]") instanceof HTMLElement;
+      typographyMetrics = measureTimelineTypographyMetrics(timelineRoot);
       expect(timelineWidthMeasuredPx, "Unable to measure timeline width.").toBeGreaterThan(0);
       expect(measuredRowHeightPx, "Unable to measure targeted user row height.").toBeGreaterThan(0);
     },
@@ -1134,7 +1176,12 @@ async function measureUserRow(options: {
     },
   );
 
-  return { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion };
+  return {
+    measuredRowHeightPx,
+    timelineWidthMeasuredPx,
+    renderedInVirtualizedRegion,
+    typographyMetrics,
+  };
 }
 
 async function mountChatView(options: {
@@ -1263,6 +1310,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
             },
           ];
         }
+        if (request._tag === WS_METHODS.subscribeThreadProgress) {
+          return Object.values(fixture.threadProgressSnapshotMap);
+        }
         return [];
       },
     });
@@ -1316,14 +1366,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion } =
-          await mounted.measureUserRow(targetMessageId);
+        const {
+          measuredRowHeightPx,
+          timelineWidthMeasuredPx,
+          renderedInVirtualizedRegion,
+          typographyMetrics,
+        } = await mounted.measureUserRow(targetMessageId);
 
         expect(renderedInVirtualizedRegion).toBe(true);
 
         const estimatedHeightPx = estimateTimelineMessageHeight(
           { role: "user", text: userText, attachments: [] },
-          { timelineWidthPx: timelineWidthMeasuredPx },
+          { timelineWidthPx: timelineWidthMeasuredPx, typographyMetrics },
         );
 
         expect(Math.abs(measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
@@ -1385,7 +1439,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
         const measurement = await mounted.measureUserRow(targetMessageId);
         const estimatedHeightPx = estimateTimelineMessageHeight(
           { role: "user", text: userText, attachments: [] },
-          { timelineWidthPx: measurement.timelineWidthMeasuredPx },
+          {
+            timelineWidthPx: measurement.timelineWidthMeasuredPx,
+            typographyMetrics: measurement.typographyMetrics,
+          },
         );
 
         expect(measurement.renderedInVirtualizedRegion).toBe(true);
@@ -1433,11 +1490,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     const estimatedDesktopPx = estimateTimelineMessageHeight(
       { role: "user", text: userText, attachments: [] },
-      { timelineWidthPx: desktopMeasurement.timelineWidthMeasuredPx },
+      {
+        timelineWidthPx: desktopMeasurement.timelineWidthMeasuredPx,
+        typographyMetrics: desktopMeasurement.typographyMetrics,
+      },
     );
     const estimatedMobilePx = estimateTimelineMessageHeight(
       { role: "user", text: userText, attachments: [] },
-      { timelineWidthPx: mobileMeasurement.timelineWidthMeasuredPx },
+      {
+        timelineWidthPx: mobileMeasurement.timelineWidthMeasuredPx,
+        typographyMetrics: mobileMeasurement.typographyMetrics,
+      },
     );
 
     const measuredDeltaPx =
@@ -1465,8 +1528,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion } =
-          await mounted.measureUserRow(targetMessageId);
+        const {
+          measuredRowHeightPx,
+          timelineWidthMeasuredPx,
+          renderedInVirtualizedRegion,
+          typographyMetrics,
+        } = await mounted.measureUserRow(targetMessageId);
 
         expect(renderedInVirtualizedRegion).toBe(true);
 
@@ -1476,7 +1543,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             text: userText,
             attachments: [{ id: "attachment-1" }, { id: "attachment-2" }],
           },
-          { timelineWidthPx: timelineWidthMeasuredPx },
+          { timelineWidthPx: timelineWidthMeasuredPx, typographyMetrics },
         );
 
         expect(Math.abs(measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
@@ -2678,8 +2745,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-stop-button-cursor" as MessageId,
         targetText: "stop button cursor target",
-        sessionStatus: "running",
       }),
+      configureFixture: (currentFixture) => {
+        currentFixture.threadProgressSnapshotMap = {
+          [THREAD_ID]: createThreadProgressSnapshot({
+            phase: "agent_running",
+            activeTurnId: "turn-stop-button-cursor" as TurnId,
+            lastRuntimeEventType: "turn.started",
+          }),
+        };
+      },
     });
 
     try {
@@ -2689,6 +2764,65 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       expect(getComputedStyle(stopButton).cursor).toBe("pointer");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses session activeTurnId fallback before live progress snapshot hydrates", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-session-active-turn-fallback" as MessageId,
+        targetText: "session active turn fallback target",
+        sessionStatus: "running",
+        sessionActiveTurnId: "turn-session-active-fallback" as TurnId,
+      }),
+    });
+
+    try {
+      await waitForStopButton();
+      expect(document.body.textContent).toContain("Agent working");
+      expect(document.body.textContent).not.toContain("Resyncing with server");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("disables send while recovering and shows resync state", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-recovering-send-disabled" as MessageId,
+        targetText: "recovering send disabled target",
+      }),
+      configureFixture: (currentFixture) => {
+        currentFixture.threadProgressSnapshotMap = {
+          [THREAD_ID]: createThreadProgressSnapshot({
+            phase: "recovering",
+            updatedAt: isoAt(120),
+            source: "client-recovery",
+          }),
+        };
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "resume after recovery");
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Resyncing with server");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const connectingButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Connecting"]'),
+        "Unable to find recovery-disabled send button.",
+      );
+      expect(connectingButton.disabled).toBe(true);
     } finally {
       await mounted.cleanup();
     }

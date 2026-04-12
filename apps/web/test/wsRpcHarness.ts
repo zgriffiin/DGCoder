@@ -26,6 +26,7 @@ const STREAM_METHODS = new Set<string>([
   WS_METHODS.gitRunStackedAction,
   WS_METHODS.subscribeGitStatus,
   WS_METHODS.subscribeOrchestrationDomainEvents,
+  WS_METHODS.subscribeThreadProgress,
   WS_METHODS.subscribeTerminalEvents,
   WS_METHODS.subscribeServerConfig,
   WS_METHODS.subscribeServerLifecycle,
@@ -113,6 +114,30 @@ export class BrowserWsRpcHarness {
     }
     const messages = this.parser.decode(rawData);
     for (const message of messages) {
+      if (message && typeof message === "object" && "_tag" in message && message._tag === "Ping") {
+        this.sendProtocolMessage({ _tag: "Pong" });
+        continue;
+      }
+      if (
+        message &&
+        typeof message === "object" &&
+        "_tag" in message &&
+        message._tag === "Request" &&
+        "tag" in message &&
+        message.tag === "Ping" &&
+        "id" in message &&
+        typeof message.id === "string"
+      ) {
+        this.sendProtocolMessage({
+          _tag: "Exit",
+          requestId: message.id,
+          exit: {
+            _tag: "Success",
+            value: null,
+          },
+        });
+        continue;
+      }
       await Effect.runPromise(server.write(0, message as never));
     }
   }
@@ -139,15 +164,19 @@ export class BrowserWsRpcHarness {
     return {
       onFromServer: (response: unknown) =>
         Effect.sync(() => {
-          if (!this.client) {
-            return;
-          }
-          const encoded = this.parser.encode(response);
-          if (typeof encoded === "string") {
-            this.client.send(encoded);
-          }
+          this.sendProtocolMessage(response);
         }),
     };
+  }
+
+  private sendProtocolMessage(message: unknown): void {
+    if (!this.client) {
+      return;
+    }
+    const encoded = this.parser.encode(message);
+    if (typeof encoded === "string") {
+      this.client.send(encoded);
+    }
   }
 
   private handleUnary(method: string, payload: unknown) {

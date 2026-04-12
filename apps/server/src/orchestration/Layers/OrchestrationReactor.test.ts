@@ -1,10 +1,11 @@
-import { Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
+import { ThreadProgressTracker } from "../Services/ThreadProgressTracker.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 
 describe("OrchestrationReactor", () => {
@@ -49,6 +50,19 @@ describe("OrchestrationReactor", () => {
             drain: Effect.void,
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(ThreadProgressTracker, {
+            start: () => {
+              started.push("thread-progress-tracker");
+              return Effect.void;
+            },
+            getSnapshot: () => Effect.succeed({}),
+            streamSnapshots: Stream.empty,
+            markPostRunStageStart: () => Effect.void,
+            markPostRunStageEnd: () => Effect.void,
+            markThreadPhase: () => Effect.void,
+          }),
+        ),
       ),
     );
 
@@ -57,6 +71,7 @@ describe("OrchestrationReactor", () => {
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
 
     expect(started).toEqual([
+      "thread-progress-tracker",
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",

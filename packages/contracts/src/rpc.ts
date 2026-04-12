@@ -60,6 +60,9 @@ import {
   OrchestrationReplayEventsError,
   OrchestrationReplayEventsInput,
   OrchestrationRpcSchemas,
+  THREAD_PROGRESS_WS_METHODS,
+  ThreadProgressGetSnapshotError,
+  ThreadProgressSnapshot,
 } from "./orchestration";
 import {
   ProjectSearchEntriesError,
@@ -139,6 +142,7 @@ export const WS_METHODS = {
   // Streaming subscriptions
   subscribeGitStatus: "subscribeGitStatus",
   subscribeOrchestrationDomainEvents: "subscribeOrchestrationDomainEvents",
+  subscribeThreadProgress: "subscribeThreadProgress",
   subscribeTerminalEvents: "subscribeTerminalEvents",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
@@ -372,6 +376,12 @@ export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.
   error: OrchestrationReplayEventsError,
 });
 
+export const WsThreadProgressGetSnapshotRpc = Rpc.make(THREAD_PROGRESS_WS_METHODS.getSnapshot, {
+  payload: OrchestrationRpcSchemas.threadProgressGetSnapshot.input,
+  success: OrchestrationRpcSchemas.threadProgressGetSnapshot.output,
+  error: ThreadProgressGetSnapshotError,
+});
+
 export const WsSubscribeOrchestrationDomainEventsRpc = Rpc.make(
   WS_METHODS.subscribeOrchestrationDomainEvents,
   {
@@ -380,6 +390,12 @@ export const WsSubscribeOrchestrationDomainEventsRpc = Rpc.make(
     stream: true,
   },
 );
+
+export const WsSubscribeThreadProgressRpc = Rpc.make(WS_METHODS.subscribeThreadProgress, {
+  payload: Schema.Struct({}),
+  success: ThreadProgressSnapshot,
+  stream: true,
+});
 
 export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTerminalEvents, {
   payload: Schema.Struct({}),
@@ -435,6 +451,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
   WsSubscribeOrchestrationDomainEventsRpc,
+  WsSubscribeThreadProgressRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
@@ -443,4 +460,5 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
+  WsThreadProgressGetSnapshotRpc,
 );

@@ -53,6 +53,7 @@ import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceip
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
+import { ThreadProgressTrackerLive } from "../src/orchestration/Layers/ThreadProgressTracker.ts";
 import { QualityGateService } from "../src/qualityGate.ts";
 import {
   OrchestrationEngineService,
@@ -340,14 +341,20 @@ export const makeOrchestrationIntegrationHarness = (
       ),
       Layer.provideMerge(WorkspacePathsLive),
     );
-    const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
+    const threadProgressLayer = Layer.empty.pipe(Layer.provideMerge(ThreadProgressTrackerLive));
+    const orchestrationReactorLayer = Layer.empty.pipe(
+      Layer.provideMerge(OrchestrationReactorLive),
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(threadProgressLayer),
+    );
+    const resolvedOrchestrationReactorLayer = orchestrationReactorLayer.pipe(
+      Layer.provide(runtimeServicesLayer),
     );
     const layer = Layer.empty.pipe(
       Layer.provideMerge(runtimeServicesLayer),
-      Layer.provideMerge(orchestrationReactorLayer),
+      Layer.provideMerge(resolvedOrchestrationReactorLayer),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolverLive),
       Layer.provideMerge(ServerSettingsService.layerTest()),

@@ -13,6 +13,7 @@ import {
   deriveMessagesTimelineRows,
   estimateMessagesTimelineRowHeight,
 } from "./MessagesTimeline.logic";
+import { measureTimelineTypographyMetrics } from "../timelineHeight";
 
 const DEFAULT_VIEWPORT = {
   width: 960,
@@ -154,9 +155,9 @@ function createBaseTimelineProps(input: {
 }): Omit<ComponentProps<typeof MessagesTimeline>, "scrollContainer" | "activeThreadEnvironmentId"> {
   return {
     hasMessages: true,
-    isWorking: false,
+    progressState: null,
     activeTurnInProgress: false,
-    activeTurnStartedAt: null,
+    checkpointActionsDisabled: false,
     timelineEntries: deriveTimelineEntries(
       input.messages ?? [],
       input.proposedPlans ?? [],
@@ -510,6 +511,7 @@ async function measureTimelineRow(input: {
   let actualHeightPx = 0;
   let virtualizerSizePx = 0;
   let renderedInVirtualizedRegion = false;
+  let typographyMetrics = null;
 
   await vi.waitFor(
     async () => {
@@ -529,6 +531,7 @@ async function measureTimelineRow(input: {
       actualHeightPx = rowElement!.getBoundingClientRect().height;
       virtualizerSizePx = Number.parseFloat(virtualRowElement!.dataset.virtualRowSize ?? "0");
       renderedInVirtualizedRegion = virtualRowElement!.hasAttribute("data-index");
+      typographyMetrics = measureTimelineTypographyMetrics(timelineRoot);
 
       expect(timelineWidthPx).toBeGreaterThan(0);
       expect(actualHeightPx).toBeGreaterThan(0);
@@ -541,8 +544,7 @@ async function measureTimelineRow(input: {
   const rows = deriveMessagesTimelineRows({
     timelineEntries: input.props.timelineEntries,
     completionDividerBeforeEntryId: input.props.completionDividerBeforeEntryId,
-    isWorking: input.props.isWorking,
-    activeTurnStartedAt: input.props.activeTurnStartedAt,
+    workingState: input.props.progressState,
   });
   const targetRow = rows.find((row) => row.id === input.targetRowId);
   expect(targetRow, `Unable to derive target row ${input.targetRowId}.`).toBeTruthy();
@@ -552,6 +554,7 @@ async function measureTimelineRow(input: {
     estimatedHeightPx: estimateMessagesTimelineRowHeight(targetRow!, {
       expandedWorkGroups: input.props.expandedWorkGroups,
       timelineWidthPx,
+      typographyMetrics,
       turnDiffSummaryByAssistantMessageId: input.props.turnDiffSummaryByAssistantMessageId,
     }),
     timelineWidthPx,
