@@ -245,6 +245,7 @@ function createSnapshotForTargetUser(options: {
   targetText: string;
   targetAttachmentCount?: number;
   sessionStatus?: OrchestrationSessionStatus;
+  sessionActiveTurnId?: TurnId | null;
 }): OrchestrationReadModel {
   const messages: Array<OrchestrationReadModel["threads"][number]["messages"][number]> = [];
 
@@ -325,7 +326,7 @@ function createSnapshotForTargetUser(options: {
           status: options.sessionStatus ?? "ready",
           providerName: "codex",
           runtimeMode: "full-access",
-          activeTurnId: null,
+          activeTurnId: options.sessionActiveTurnId ?? null,
           lastError: null,
           updatedAt: NOW_ISO,
         },
@@ -2734,6 +2735,26 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       expect(getComputedStyle(stopButton).cursor).toBe("pointer");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses session activeTurnId fallback before live progress snapshot hydrates", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-session-active-turn-fallback" as MessageId,
+        targetText: "session active turn fallback target",
+        sessionStatus: "running",
+        sessionActiveTurnId: "turn-session-active-fallback" as TurnId,
+      }),
+    });
+
+    try {
+      await waitForStopButton();
+      expect(document.body.textContent).toContain("Agent working");
+      expect(document.body.textContent).not.toContain("Resyncing with server");
     } finally {
       await mounted.cleanup();
     }

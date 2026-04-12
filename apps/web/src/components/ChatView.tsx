@@ -1406,11 +1406,13 @@ export default function ChatView(props: ChatViewProps) {
     localDispatchStartedAt,
   );
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
+  const sessionActiveTurnId = activeThread?.session?.activeTurnId ?? null;
+  const fallbackActiveTurnId = activeLatestTurnId ?? sessionActiveTurnId;
   const activePendingApprovalRequestId = activePendingApproval?.requestId ?? null;
   const activePendingUserInputRequestId = activePendingUserInput?.requestId ?? null;
   const fallbackProgressKey = [
     activeThreadId ?? "",
-    activeLatestTurnId ?? "",
+    fallbackActiveTurnId ?? "",
     activePendingApprovalRequestId ?? "",
     activePendingUserInputRequestId ?? "",
     phase,
@@ -1437,11 +1439,11 @@ export default function ChatView(props: ChatViewProps) {
         isSendBusy,
         isConnecting,
         isRevertingCheckpoint,
-        activeTurnId: activeLatestTurnId,
+        activeTurnId: fallbackActiveTurnId,
         updatedAt: fallbackProgressUpdatedAt,
       }),
     [
-      activeLatestTurnId,
+      fallbackActiveTurnId,
       activePendingApprovalRequestId,
       activePendingUserInputRequestId,
       activeThreadId,
