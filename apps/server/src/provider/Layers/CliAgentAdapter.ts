@@ -12,13 +12,24 @@ import {
   type CliAgentSessionContext,
 } from "./CliAgentAdapterRuntime";
 
-function buildCliChatArgs(prompt: string, model?: string) {
-  const args = ["chat", "--no-interactive", "--trust-all-tools"];
-  if (model && model !== "default") {
-    args.push("--model", model);
+function buildCliChatArgs(prompt: string) {
+  return ["chat", "--no-interactive", "--trust-all-tools", prompt];
+}
+
+function normalizeKiroModel(model: string | undefined) {
+  const trimmed = model?.trim();
+  if (!trimmed) {
+    return undefined;
   }
-  args.push(prompt);
-  return args;
+  return trimmed === "default" ? "auto" : trimmed;
+}
+
+function buildKiroPreparationArgs(model: string | undefined) {
+  const selectedModel = normalizeKiroModel(model);
+  if (!selectedModel) {
+    return [];
+  }
+  return [["settings", "chat.defaultModel", selectedModel]];
 }
 
 function makeCliAgentAdapter(config: CliAgentAdapterConfig) {
@@ -42,7 +53,8 @@ const KIRO_ADAPTER_CONFIG: CliAgentAdapterConfig = {
   provider: "kiro",
   displayName: "Kiro",
   selectCommandSettings: (settings) => settings.providers.kiro,
-  buildTurnArgs: ({ prompt, model }) => buildCliChatArgs(prompt, model),
+  buildTurnArgs: ({ prompt }) => buildCliChatArgs(prompt),
+  buildPreparationArgs: ({ model }) => buildKiroPreparationArgs(model),
 };
 
 const AMAZON_Q_ADAPTER_CONFIG: CliAgentAdapterConfig = {

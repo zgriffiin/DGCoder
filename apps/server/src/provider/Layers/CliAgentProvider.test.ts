@@ -42,6 +42,16 @@ function mockHandle(result: { stdout: string; stderr: string; code: number }) {
   });
 }
 
+function buildKiroStatusSpawner() {
+  return mockSpawnerLayer((args) => {
+    if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
+      return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
+    if (matchesCliInvocation(args, "kiro-cli", ["whoami", "--format", "json"]))
+      return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+    throw new Error(`Unexpected args: ${args.join(" ")}`);
+  });
+}
+
 function mockSpawnerLayer(
   handler: (
     args: ReadonlyArray<string>,
@@ -98,18 +108,27 @@ describe("checkCliAgentProviderStatus readiness", () => {
         KIRO_MODEL_SLUGS,
       );
     }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          ServerSettingsService.layerTest(),
-          mockSpawnerLayer((args) => {
-            if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
-              return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
-            if (matchesCliInvocation(args, "kiro-cli", ["whoami", "--format", "json"]))
-              return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${args.join(" ")}`);
-          }),
-        ),
-      ),
+      Effect.provide(Layer.mergeAll(ServerSettingsService.layerTest(), buildKiroStatusSpawner())),
+    ),
+  );
+
+  it.effect("surfaces Kiro auto as the default picker label", () =>
+    Effect.gen(function* () {
+      const status = yield* checkCliAgentProviderStatus(KIRO_PROVIDER_CONFIG);
+      assert.deepStrictEqual(status.models[0], {
+        slug: "default",
+        name: "auto",
+        isCustom: false,
+        capabilities: {
+          reasoningEffortLevels: [],
+          supportsFastMode: false,
+          supportsThinkingToggle: false,
+          contextWindowOptions: [],
+          promptInjectedEffortLevels: [],
+        },
+      });
+    }).pipe(
+      Effect.provide(Layer.mergeAll(ServerSettingsService.layerTest(), buildKiroStatusSpawner())),
     ),
   );
 

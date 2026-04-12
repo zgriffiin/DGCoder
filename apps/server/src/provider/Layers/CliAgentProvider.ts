@@ -82,7 +82,7 @@ const AMAZON_Q_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = cliAgentBui
 const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = cliAgentBuiltInModels(
   {
     slug: "default",
-    name: "Kiro default",
+    name: "auto",
   },
   {
     slug: "claude-opus-4.6",

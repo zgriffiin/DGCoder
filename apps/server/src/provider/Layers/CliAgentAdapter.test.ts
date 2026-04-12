@@ -144,6 +144,10 @@ describe("CliAgentAdapter Kiro chat command", () => {
       assert.deepEqual(invocations, [
         {
           command: "kiro-cli",
+          args: ["settings", "chat.defaultModel", "auto"],
+        },
+        {
+          command: "kiro-cli",
           args: ["chat", "--no-interactive", "--trust-all-tools", "Inspect the workspace"],
         },
       ]);
@@ -175,7 +179,7 @@ describe("CliAgentAdapter Kiro chat command", () => {
     );
   });
 
-  it.effect("passes an explicit Kiro model slug to the CLI when selected", () => {
+  it.effect("applies an explicit Kiro model before running chat", () => {
     const invocations: Array<{ command: string; args: ReadonlyArray<string> }> = [];
 
     return Effect.gen(function* () {
@@ -203,14 +207,11 @@ describe("CliAgentAdapter Kiro chat command", () => {
       assert.deepEqual(invocations, [
         {
           command: "kiro-cli",
-          args: [
-            "chat",
-            "--no-interactive",
-            "--trust-all-tools",
-            "--model",
-            "claude-opus-4.6",
-            "Inspect the workspace",
-          ],
+          args: ["settings", "chat.defaultModel", "claude-opus-4.6"],
+        },
+        {
+          command: "kiro-cli",
+          args: ["chat", "--no-interactive", "--trust-all-tools", "Inspect the workspace"],
         },
       ]);
     }).pipe(
@@ -268,6 +269,24 @@ describe("CliAgentAdapter Kiro chat command", () => {
       );
 
       assert.deepEqual(invocations, [
+        {
+          command: wslCommand,
+          args: [
+            "-d",
+            "Ubuntu",
+            "--cd",
+            wslCwd,
+            "--exec",
+            "bash",
+            "-lc",
+            'exec "$@"',
+            "bash",
+            "kiro-cli",
+            "settings",
+            "chat.defaultModel",
+            "auto",
+          ],
+        },
         {
           command: wslCommand,
           args: [

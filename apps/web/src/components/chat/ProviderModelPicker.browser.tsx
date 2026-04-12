@@ -119,7 +119,7 @@ const TEST_PROVIDERS: ReadonlyArray<ServerProvider> = [
     models: [
       {
         slug: "default",
-        name: "Kiro default",
+        name: "auto",
         isCustom: false,
         capabilities: {
           reasoningEffortLevels: [],
@@ -397,7 +397,7 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("dispatches Kiro when its default model is selected", async () => {
+  it("dispatches Kiro when auto is selected", async () => {
     const mounted = await mountPicker({
       provider: "codex",
       model: "gpt-5-codex",
@@ -407,7 +407,7 @@ describe("ProviderModelPicker", () => {
     try {
       await page.getByRole("button").click();
       await page.getByRole("menuitem", { name: "Kiro" }).hover();
-      await page.getByRole("menuitemradio", { name: "Kiro default" }).click();
+      await page.getByRole("menuitemradio", { name: "auto" }).click();
 
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith("kiro", "default");
     } finally {
