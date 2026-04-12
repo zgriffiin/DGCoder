@@ -2,7 +2,7 @@ import { type MessageId, type ThreadProgressPhase } from "@t3tools/contracts";
 import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
-import { estimateTimelineMessageHeight } from "../timelineHeight";
+import { estimateTimelineMessageHeight, type TimelineTypographyMetrics } from "../timelineHeight";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
@@ -150,6 +150,7 @@ export function estimateMessagesTimelineRowHeight(
   row: MessagesTimelineRow,
   input: {
     timelineWidthPx: number | null;
+    typographyMetrics?: TimelineTypographyMetrics | null;
     expandedWorkGroups?: Readonly<Record<string, boolean>>;
     turnDiffSummaryByAssistantMessageId?: ReadonlyMap<MessageId, TurnDiffSummary>;
   },
@@ -164,6 +165,7 @@ export function estimateMessagesTimelineRowHeight(
     case "message": {
       let estimate = estimateTimelineMessageHeight(row.message, {
         timelineWidthPx: input.timelineWidthPx,
+        typographyMetrics: input.typographyMetrics,
       });
       const turnDiffSummary = input.turnDiffSummaryByAssistantMessageId?.get(row.message.id);
       if (turnDiffSummary && turnDiffSummary.files.length > 0) {

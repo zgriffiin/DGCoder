@@ -51,7 +51,11 @@ import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store"
 import { useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
-import { estimateTimelineMessageHeight } from "./timelineHeight";
+import {
+  estimateTimelineMessageHeight,
+  measureTimelineTypographyMetrics,
+  type TimelineTypographyMetrics,
+} from "./timelineHeight";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
 vi.mock("../lib/gitStatusState", () => ({
@@ -131,6 +135,7 @@ interface UserRowMeasurement {
   measuredRowHeightPx: number;
   timelineWidthMeasuredPx: number;
   renderedInVirtualizedRegion: boolean;
+  typographyMetrics: TimelineTypographyMetrics | null;
 }
 
 interface MountedChatView {
@@ -1150,6 +1155,7 @@ async function measureUserRow(options: {
   let timelineWidthMeasuredPx = 0;
   let measuredRowHeightPx = 0;
   let renderedInVirtualizedRegion = false;
+  let typographyMetrics: TimelineTypographyMetrics | null = null;
   await vi.waitFor(
     async () => {
       scrollContainer.scrollTop = 0;
@@ -1160,6 +1166,7 @@ async function measureUserRow(options: {
       timelineWidthMeasuredPx = timelineRoot.getBoundingClientRect().width;
       measuredRowHeightPx = measuredRow!.getBoundingClientRect().height;
       renderedInVirtualizedRegion = measuredRow!.closest("[data-index]") instanceof HTMLElement;
+      typographyMetrics = measureTimelineTypographyMetrics(timelineRoot);
       expect(timelineWidthMeasuredPx, "Unable to measure timeline width.").toBeGreaterThan(0);
       expect(measuredRowHeightPx, "Unable to measure targeted user row height.").toBeGreaterThan(0);
     },
@@ -1169,7 +1176,12 @@ async function measureUserRow(options: {
     },
   );
 
-  return { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion };
+  return {
+    measuredRowHeightPx,
+    timelineWidthMeasuredPx,
+    renderedInVirtualizedRegion,
+    typographyMetrics,
+  };
 }
 
 async function mountChatView(options: {
@@ -1354,14 +1366,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion } =
-          await mounted.measureUserRow(targetMessageId);
+        const {
+          measuredRowHeightPx,
+          timelineWidthMeasuredPx,
+          renderedInVirtualizedRegion,
+          typographyMetrics,
+        } = await mounted.measureUserRow(targetMessageId);
 
         expect(renderedInVirtualizedRegion).toBe(true);
 
         const estimatedHeightPx = estimateTimelineMessageHeight(
           { role: "user", text: userText, attachments: [] },
-          { timelineWidthPx: timelineWidthMeasuredPx },
+          { timelineWidthPx: timelineWidthMeasuredPx, typographyMetrics },
         );
 
         expect(Math.abs(measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
@@ -1423,7 +1439,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
         const measurement = await mounted.measureUserRow(targetMessageId);
         const estimatedHeightPx = estimateTimelineMessageHeight(
           { role: "user", text: userText, attachments: [] },
-          { timelineWidthPx: measurement.timelineWidthMeasuredPx },
+          {
+            timelineWidthPx: measurement.timelineWidthMeasuredPx,
+            typographyMetrics: measurement.typographyMetrics,
+          },
         );
 
         expect(measurement.renderedInVirtualizedRegion).toBe(true);
@@ -1471,11 +1490,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     const estimatedDesktopPx = estimateTimelineMessageHeight(
       { role: "user", text: userText, attachments: [] },
-      { timelineWidthPx: desktopMeasurement.timelineWidthMeasuredPx },
+      {
+        timelineWidthPx: desktopMeasurement.timelineWidthMeasuredPx,
+        typographyMetrics: desktopMeasurement.typographyMetrics,
+      },
     );
     const estimatedMobilePx = estimateTimelineMessageHeight(
       { role: "user", text: userText, attachments: [] },
-      { timelineWidthPx: mobileMeasurement.timelineWidthMeasuredPx },
+      {
+        timelineWidthPx: mobileMeasurement.timelineWidthMeasuredPx,
+        typographyMetrics: mobileMeasurement.typographyMetrics,
+      },
     );
 
     const measuredDeltaPx =
@@ -1503,8 +1528,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        const { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion } =
-          await mounted.measureUserRow(targetMessageId);
+        const {
+          measuredRowHeightPx,
+          timelineWidthMeasuredPx,
+          renderedInVirtualizedRegion,
+          typographyMetrics,
+        } = await mounted.measureUserRow(targetMessageId);
 
         expect(renderedInVirtualizedRegion).toBe(true);
 
@@ -1514,7 +1543,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             text: userText,
             attachments: [{ id: "attachment-1" }, { id: "attachment-2" }],
           },
-          { timelineWidthPx: timelineWidthMeasuredPx },
+          { timelineWidthPx: timelineWidthMeasuredPx, typographyMetrics },
         );
 
         expect(Math.abs(measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(

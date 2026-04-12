@@ -21,6 +21,12 @@ const USER_MONO_AVG_CHAR_WIDTH_PX = 8.4;
 const ASSISTANT_AVG_CHAR_WIDTH_PX = 7.2;
 const MIN_USER_CHARS_PER_LINE = 4;
 const MIN_ASSISTANT_CHARS_PER_LINE = 20;
+const USER_METRICS_SAMPLE_TEXT = "x".repeat(256);
+
+export interface TimelineTypographyMetrics {
+  userMonoAvgCharWidthPx?: number;
+  userLineHeightPx?: number;
+}
 
 interface TimelineMessageHeightInput {
   role: "user" | "assistant" | "system";
@@ -30,6 +36,7 @@ interface TimelineMessageHeightInput {
 
 interface TimelineHeightEstimateLayout {
   timelineWidthPx: number | null;
+  typographyMetrics?: TimelineTypographyMetrics | null | undefined;
 }
 
 function estimateWrappedLineCount(text: string, charsPerLine: number): number {
@@ -55,11 +62,33 @@ function isFinitePositiveNumber(value: number | null | undefined): value is numb
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function estimateCharsPerLineForUser(timelineWidthPx: number | null): number {
+function userMonoAvgCharWidthPxForLayout(
+  typographyMetrics: TimelineTypographyMetrics | null | undefined,
+): number {
+  return isFinitePositiveNumber(typographyMetrics?.userMonoAvgCharWidthPx)
+    ? typographyMetrics.userMonoAvgCharWidthPx
+    : USER_MONO_AVG_CHAR_WIDTH_PX;
+}
+
+function userLineHeightPxForLayout(
+  typographyMetrics: TimelineTypographyMetrics | null | undefined,
+): number {
+  return isFinitePositiveNumber(typographyMetrics?.userLineHeightPx)
+    ? typographyMetrics.userLineHeightPx
+    : USER_LINE_HEIGHT_PX;
+}
+
+function estimateCharsPerLineForUser(
+  timelineWidthPx: number | null,
+  typographyMetrics: TimelineTypographyMetrics | null | undefined,
+): number {
   if (!isFinitePositiveNumber(timelineWidthPx)) return USER_CHARS_PER_LINE_FALLBACK;
   const bubbleWidthPx = timelineWidthPx * USER_BUBBLE_WIDTH_RATIO;
   const textWidthPx = Math.max(bubbleWidthPx - USER_BUBBLE_HORIZONTAL_PADDING_PX, 0);
-  return Math.max(MIN_USER_CHARS_PER_LINE, Math.floor(textWidthPx / USER_MONO_AVG_CHAR_WIDTH_PX));
+  return Math.max(
+    MIN_USER_CHARS_PER_LINE,
+    Math.floor(textWidthPx / userMonoAvgCharWidthPxForLayout(typographyMetrics)),
+  );
 }
 
 function estimateCharsPerLineForAssistant(timelineWidthPx: number | null): number {
@@ -82,7 +111,10 @@ export function estimateTimelineMessageHeight(
   }
 
   if (message.role === "user") {
-    const charsPerLine = estimateCharsPerLineForUser(layout.timelineWidthPx);
+    const charsPerLine = estimateCharsPerLineForUser(
+      layout.timelineWidthPx,
+      layout.typographyMetrics,
+    );
     const displayedUserMessage = deriveDisplayedUserMessageState(message.text);
     const renderedText =
       displayedUserMessage.contexts.length > 0
@@ -97,7 +129,11 @@ export function estimateTimelineMessageHeight(
     const attachmentCount = message.attachments?.length ?? 0;
     const attachmentRows = Math.ceil(attachmentCount / ATTACHMENTS_PER_ROW);
     const attachmentHeight = attachmentRows * USER_ATTACHMENT_ROW_HEIGHT_PX;
-    return USER_BASE_HEIGHT_PX + estimatedLines * USER_LINE_HEIGHT_PX + attachmentHeight;
+    return (
+      USER_BASE_HEIGHT_PX +
+      estimatedLines * userLineHeightPxForLayout(layout.typographyMetrics) +
+      attachmentHeight
+    );
   }
 
   // `system` messages are not rendered in the chat timeline, but keep a stable
@@ -105,4 +141,53 @@ export function estimateTimelineMessageHeight(
   const charsPerLine = estimateCharsPerLineForAssistant(layout.timelineWidthPx);
   const estimatedLines = estimateWrappedLineCount(message.text, charsPerLine);
   return ASSISTANT_BASE_HEIGHT_PX + estimatedLines * ASSISTANT_LINE_HEIGHT_PX;
+}
+
+export function measureTimelineTypographyMetrics(
+  timelineRoot: HTMLElement | null,
+): TimelineTypographyMetrics | null {
+  if (!timelineRoot || typeof document === "undefined") {
+    return null;
+  }
+
+  const probe = document.createElement("div");
+  probe.setAttribute("aria-hidden", "true");
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.pointerEvents = "none";
+  probe.style.left = "0";
+  probe.style.top = "0";
+  probe.style.width = "auto";
+  probe.style.maxWidth = "none";
+  probe.style.padding = "0";
+  probe.style.margin = "0";
+  probe.style.border = "0";
+  probe.style.whiteSpace = "pre";
+  probe.className = "font-mono text-sm leading-relaxed text-foreground";
+  probe.textContent = USER_METRICS_SAMPLE_TEXT;
+
+  timelineRoot.append(probe);
+  try {
+    const computedStyle = window.getComputedStyle(probe);
+    const measuredWidth = probe.getBoundingClientRect().width;
+    const parsedLineHeight = Number.parseFloat(computedStyle.lineHeight);
+    const userMonoAvgCharWidthPx = measuredWidth / USER_METRICS_SAMPLE_TEXT.length;
+    const userLineHeightPx = Number.isFinite(parsedLineHeight)
+      ? parsedLineHeight
+      : probe.getBoundingClientRect().height;
+
+    if (
+      !isFinitePositiveNumber(userMonoAvgCharWidthPx) ||
+      !isFinitePositiveNumber(userLineHeightPx)
+    ) {
+      return null;
+    }
+
+    return {
+      userMonoAvgCharWidthPx,
+      userLineHeightPx,
+    };
+  } finally {
+    probe.remove();
+  }
 }

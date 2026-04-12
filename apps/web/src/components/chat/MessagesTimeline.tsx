@@ -68,6 +68,10 @@ import {
 } from "./userMessageTerminalContexts";
 import { useAuthenticatedAssetUrl } from "~/hooks/useAuthenticatedAssetUrl";
 import {
+  measureTimelineTypographyMetrics,
+  type TimelineTypographyMetrics,
+} from "../timelineHeight";
+import {
   Dialog,
   DialogDescription,
   DialogHeader,
@@ -190,6 +194,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+  const [timelineTypographyMetrics, setTimelineTypographyMetrics] =
+    useState<TimelineTypographyMetrics | null>(null);
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -215,6 +221,48 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       observer.disconnect();
     };
   }, [hasMessages, progressState]);
+
+  useLayoutEffect(() => {
+    const timelineRoot = timelineRootRef.current;
+    if (!timelineRoot) return;
+
+    let cancelled = false;
+    const updateMetrics = () => {
+      const nextMetrics = measureTimelineTypographyMetrics(timelineRoot);
+      if (cancelled) return;
+      setTimelineTypographyMetrics((previousMetrics) => {
+        if (
+          previousMetrics &&
+          nextMetrics &&
+          Math.abs(
+            (previousMetrics.userMonoAvgCharWidthPx ?? 0) -
+              (nextMetrics.userMonoAvgCharWidthPx ?? 0),
+          ) < 0.05 &&
+          Math.abs((previousMetrics.userLineHeightPx ?? 0) - (nextMetrics.userLineHeightPx ?? 0)) <
+            0.05
+        ) {
+          return previousMetrics;
+        }
+        return nextMetrics;
+      });
+    };
+
+    updateMetrics();
+
+    const fontFaceSet = "fonts" in document ? document.fonts : null;
+    const onFontsLoaded = () => {
+      updateMetrics();
+    };
+    fontFaceSet?.addEventListener?.("loadingdone", onFontsLoaded);
+    void fontFaceSet?.ready.then(() => {
+      updateMetrics();
+    });
+
+    return () => {
+      cancelled = true;
+      fontFaceSet?.removeEventListener?.("loadingdone", onFontsLoaded);
+    };
+  }, []);
 
   const rows = useMemo(
     () =>
@@ -288,6 +336,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return estimateMessagesTimelineRowHeight(row, {
         expandedWorkGroups,
         timelineWidthPx,
+        typographyMetrics: timelineTypographyMetrics,
         turnDiffSummaryByAssistantMessageId,
       });
     },
@@ -298,7 +347,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   useEffect(() => {
     if (timelineWidthPx === null) return;
     rowVirtualizer.measure();
-  }, [rowVirtualizer, timelineWidthPx]);
+  }, [rowVirtualizer, timelineTypographyMetrics, timelineWidthPx]);
   useEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
       const viewportHeight = instance.scrollRect?.height ?? 0;
