@@ -175,6 +175,67 @@ describe("CliAgentAdapter Kiro chat command", () => {
     );
   });
 
+  it.effect("passes an explicit Kiro model slug to the CLI when selected", () => {
+    const invocations: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+
+    return Effect.gen(function* () {
+      const adapter = yield* KiroAdapter;
+
+      yield* adapter.startSession({
+        threadId: ThreadId.makeUnsafe("thread-cli-agent-kiro-model"),
+        provider: "kiro",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: ThreadId.makeUnsafe("thread-cli-agent-kiro-model"),
+        input: "Inspect the workspace",
+        modelSelection: {
+          provider: "kiro",
+          model: "claude-opus-4.6",
+        },
+      });
+      yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runDrain,
+        Effect.timeout("2 seconds"),
+      );
+
+      assert.deepEqual(invocations, [
+        {
+          command: "kiro-cli",
+          args: [
+            "chat",
+            "--no-interactive",
+            "--trust-all-tools",
+            "--model",
+            "claude-opus-4.6",
+            "Inspect the workspace",
+          ],
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        KiroAdapterLive.pipe(
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              providers: {
+                kiro: {
+                  executionMode: "host",
+                },
+              },
+            }),
+          ),
+          Layer.provideMerge(
+            mockCommandSpawnerLayer((command, args) => {
+              invocations.push({ command, args: [...args] });
+              return { stdout: "Kiro response\n", stderr: "", code: 0 };
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
   it.effect("runs Kiro turns through WSL when configured", () => {
     const invocations: Array<{ command: string; args: ReadonlyArray<string> }> = [];
     const wslCommand = process.platform === "win32" ? "wsl.exe" : "wsl";

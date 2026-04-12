@@ -129,6 +129,18 @@ const TEST_PROVIDERS: ReadonlyArray<ServerProvider> = [
           promptInjectedEffortLevels: [],
         },
       },
+      {
+        slug: "claude-opus-4.6",
+        name: "claude-opus-4.6",
+        isCustom: false,
+        capabilities: {
+          reasoningEffortLevels: [],
+          supportsFastMode: false,
+          supportsThinkingToggle: false,
+          contextWindowOptions: [],
+          promptInjectedEffortLevels: [],
+        },
+      },
     ],
   },
 ];
@@ -398,6 +410,29 @@ describe("ProviderModelPicker", () => {
       await page.getByRole("menuitemradio", { name: "Kiro default" }).click();
 
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith("kiro", "default");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows Kiro built-in models and dispatches the selected slug", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitem", { name: "Kiro" }).hover();
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("claude-opus-4.6");
+      });
+
+      await page.getByRole("menuitemradio", { name: "claude-opus-4.6" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith("kiro", "claude-opus-4.6");
     } finally {
       await mounted.cleanup();
     }
