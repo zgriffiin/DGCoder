@@ -24,6 +24,10 @@ export const ORCHESTRATION_WS_METHODS = {
   replayEvents: "orchestration.replayEvents",
 } as const;
 
+export const THREAD_PROGRESS_WS_METHODS = {
+  getSnapshot: "threadProgress.getSnapshot",
+} as const;
+
 export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "kiro", "amazonQ"]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -225,6 +229,45 @@ export const OrchestrationSession = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
+
+export const ThreadProgressPhase = Schema.Literals([
+  "starting",
+  "agent_running",
+  "waiting_approval",
+  "waiting_user_input",
+  "post_processing",
+  "recovering",
+  "ready",
+  "interrupted",
+  "error",
+  "stopped",
+]);
+export type ThreadProgressPhase = typeof ThreadProgressPhase.Type;
+
+export const ThreadPostRunStage = Schema.Literals([
+  "assistant_finalize",
+  "checkpoint_capture",
+  "quality_gate",
+]);
+export type ThreadPostRunStage = typeof ThreadPostRunStage.Type;
+
+export const ThreadProgressSource = Schema.Literals(["provider-runtime", "client-recovery"]);
+export type ThreadProgressSource = typeof ThreadProgressSource.Type;
+
+export const ThreadProgressSnapshot = Schema.Struct({
+  threadId: ThreadId,
+  phase: ThreadProgressPhase,
+  activeTurnId: Schema.NullOr(TurnId),
+  postRunStages: Schema.Array(ThreadPostRunStage),
+  lastRuntimeEventType: Schema.NullOr(TrimmedNonEmptyString),
+  statusMessage: Schema.NullOr(Schema.String),
+  updatedAt: IsoDateTime,
+  source: ThreadProgressSource,
+});
+export type ThreadProgressSnapshot = typeof ThreadProgressSnapshot.Type;
+
+export const ThreadProgressSnapshotMap = Schema.Record(ThreadId, ThreadProgressSnapshot);
+export type ThreadProgressSnapshotMap = typeof ThreadProgressSnapshotMap.Type;
 
 export const OrchestrationCheckpointFile = Schema.Struct({
   path: TrimmedNonEmptyString,
@@ -1061,6 +1104,12 @@ export type OrchestrationReplayEventsInput = typeof OrchestrationReplayEventsInp
 const OrchestrationReplayEventsResult = Schema.Array(OrchestrationEvent);
 export type OrchestrationReplayEventsResult = typeof OrchestrationReplayEventsResult.Type;
 
+export const ThreadProgressGetSnapshotInput = Schema.Struct({});
+export type ThreadProgressGetSnapshotInput = typeof ThreadProgressGetSnapshotInput.Type;
+
+export const ThreadProgressGetSnapshotResult = ThreadProgressSnapshotMap;
+export type ThreadProgressGetSnapshotResult = typeof ThreadProgressGetSnapshotResult.Type;
+
 export const OrchestrationRpcSchemas = {
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
@@ -1081,6 +1130,10 @@ export const OrchestrationRpcSchemas = {
   replayEvents: {
     input: OrchestrationReplayEventsInput,
     output: OrchestrationReplayEventsResult,
+  },
+  threadProgressGetSnapshot: {
+    input: ThreadProgressGetSnapshotInput,
+    output: ThreadProgressGetSnapshotResult,
   },
 } as const;
 
@@ -1118,6 +1171,14 @@ export class OrchestrationGetFullThreadDiffError extends Schema.TaggedErrorClass
 
 export class OrchestrationReplayEventsError extends Schema.TaggedErrorClass<OrchestrationReplayEventsError>()(
   "OrchestrationReplayEventsError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
+
+export class ThreadProgressGetSnapshotError extends Schema.TaggedErrorClass<ThreadProgressGetSnapshotError>()(
+  "ThreadProgressGetSnapshotError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect),

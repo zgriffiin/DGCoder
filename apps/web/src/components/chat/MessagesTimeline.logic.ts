@@ -1,4 +1,4 @@
-import { type MessageId } from "@t3tools/contracts";
+import { type MessageId, type ThreadProgressPhase } from "@t3tools/contracts";
 import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
@@ -34,7 +34,15 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null };
+  | {
+      kind: "working";
+      id: string;
+      createdAt: string | null;
+      phase: ThreadProgressPhase;
+      label: string;
+      statusMessage: string | null;
+      showTimer: boolean;
+    };
 
 export function computeMessageDurationStart(
   messages: ReadonlyArray<TimelineDurationMessage>,
@@ -62,8 +70,13 @@ export function normalizeCompactToolLabel(value: string): string {
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   completionDividerBeforeEntryId: string | null;
-  isWorking: boolean;
-  activeTurnStartedAt: string | null;
+  workingState: {
+    phase: ThreadProgressPhase;
+    label: string;
+    statusMessage: string | null;
+    startedAt: string | null;
+    showTimer: boolean;
+  } | null;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
@@ -118,11 +131,15 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  if (input.isWorking) {
+  if (input.workingState) {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
-      createdAt: input.activeTurnStartedAt,
+      createdAt: input.workingState.startedAt,
+      phase: input.workingState.phase,
+      label: input.workingState.label,
+      statusMessage: input.workingState.statusMessage,
+      showTimer: input.workingState.showTimer,
     });
   }
 
@@ -143,7 +160,7 @@ export function estimateMessagesTimelineRowHeight(
     case "proposed-plan":
       return estimateTimelineProposedPlanHeight(row.proposedPlan);
     case "working":
-      return 40;
+      return row.statusMessage && row.statusMessage !== row.label ? 58 : 40;
     case "message": {
       let estimate = estimateTimelineMessageHeight(row.message, {
         timelineWidthPx: input.timelineWidthPx,

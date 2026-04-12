@@ -68,6 +68,10 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ThreadProgressTracker,
+  type ThreadProgressTrackerShape,
+} from "./orchestration/Services/ThreadProgressTracker.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import {
   ProviderRegistry,
@@ -291,6 +295,7 @@ const buildAppUnderTest = (options?: {
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
     browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
+    threadProgressTracker?: Partial<ThreadProgressTrackerShape>;
     serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
     serverEnvironment?: Partial<ServerEnvironmentShape>;
@@ -333,6 +338,21 @@ const buildAppUnderTest = (options?: {
       ...options?.layers?.gitManager,
     });
     const gitStatusBroadcasterLayer = GitStatusBroadcasterLive.pipe(Layer.provide(gitManagerLayer));
+    const observabilityAndProgressLayer = Layer.mergeAll(
+      Layer.mock(BrowserTraceCollector)({
+        record: () => Effect.void,
+        ...options?.layers?.browserTraceCollector,
+      }),
+      Layer.mock(ThreadProgressTracker)({
+        start: () => Effect.void,
+        getSnapshot: () => Effect.succeed({}),
+        streamSnapshots: Stream.empty,
+        markPostRunStageStart: () => Effect.void,
+        markPostRunStageEnd: () => Effect.void,
+        markThreadPhase: () => Effect.void,
+        ...options?.layers?.threadProgressTracker,
+      }),
+    );
 
     const appLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -419,12 +439,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.checkpointDiffQuery,
         }),
       ),
-      Layer.provide(
-        Layer.mock(BrowserTraceCollector)({
-          record: () => Effect.void,
-          ...options?.layers?.browserTraceCollector,
-        }),
-      ),
+      Layer.provide(observabilityAndProgressLayer),
       Layer.provide(
         Layer.mock(ServerLifecycleEvents)({
           publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),

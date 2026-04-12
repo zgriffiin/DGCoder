@@ -20,13 +20,16 @@ import {
   type GitStatusStreamEvent,
   type LocalApi,
   ORCHESTRATION_WS_METHODS,
+  THREAD_PROGRESS_WS_METHODS,
   type EnvironmentId,
   type ServerSettingsPatch,
+  type ThreadProgressSnapshot,
+  type ThreadProgressSnapshotMap,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { getKnownEnvironmentBaseUrl, type KnownEnvironment } from "@t3tools/client-runtime";
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
-import { Effect, Stream } from "effect";
+import { Duration, Effect, Option, Stream } from "effect";
 
 import {
   getPrimaryKnownEnvironment,
@@ -135,6 +138,11 @@ export interface WsRpcClient {
     readonly getFullThreadDiff: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.getFullThreadDiff>;
     readonly replayEvents: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.replayEvents>;
     readonly onDomainEvent: RpcStreamMethod<typeof WS_METHODS.subscribeOrchestrationDomainEvents>;
+    readonly getThreadProgressSnapshot: () => Promise<ThreadProgressSnapshotMap>;
+    readonly onThreadProgress: (
+      listener: (snapshot: ThreadProgressSnapshot) => void,
+      options?: StreamSubscriptionOptions,
+    ) => () => void;
   };
 }
 
@@ -151,6 +159,10 @@ type MutableWsRpcClientEntry = {
   client: WsRpcClient;
   environmentId: EnvironmentId | null;
 };
+
+const DEFAULT_RPC_TIMEOUT = Option.some(Duration.seconds(10));
+const REPLAY_RPC_TIMEOUT = Option.some(Duration.seconds(5));
+const THREAD_PROGRESS_RPC_TIMEOUT = Option.some(Duration.seconds(5));
 
 const wsRpcClientEntriesByKey = new Map<string, MutableWsRpcClientEntry>();
 const wsRpcClientKeyByEnvironmentId = new Map<EnvironmentId, string>();
@@ -402,7 +414,9 @@ export function createWsRpcClient(
     },
     orchestration: {
       getSnapshot: () =>
-        transport.request((client) => client[ORCHESTRATION_WS_METHODS.getSnapshot]({})),
+        transport.request((client) => client[ORCHESTRATION_WS_METHODS.getSnapshot]({}), {
+          timeout: DEFAULT_RPC_TIMEOUT,
+        }),
       dispatchCommand: (input) =>
         transport.request((client) => client[ORCHESTRATION_WS_METHODS.dispatchCommand](input)),
       getTurnDiff: (input) =>
@@ -411,11 +425,23 @@ export function createWsRpcClient(
         transport.request((client) => client[ORCHESTRATION_WS_METHODS.getFullThreadDiff](input)),
       replayEvents: (input) =>
         transport
-          .request((client) => client[ORCHESTRATION_WS_METHODS.replayEvents](input))
+          .request((client) => client[ORCHESTRATION_WS_METHODS.replayEvents](input), {
+            timeout: REPLAY_RPC_TIMEOUT,
+          })
           .then((events) => [...events]),
       onDomainEvent: (listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeOrchestrationDomainEvents]({}),
+          listener,
+          options,
+        ),
+      getThreadProgressSnapshot: () =>
+        transport.request((client) => client[THREAD_PROGRESS_WS_METHODS.getSnapshot]({}), {
+          timeout: THREAD_PROGRESS_RPC_TIMEOUT,
+        }),
+      onThreadProgress: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeThreadProgress]({}),
           listener,
           options,
         ),

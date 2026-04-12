@@ -55,9 +55,8 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
+        progressState={null}
         activeTurnInProgress={false}
-        activeTurnStartedAt={null}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -109,9 +108,8 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
+        progressState={null}
         activeTurnInProgress={false}
-        activeTurnStartedAt={null}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -153,9 +151,8 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
+        progressState={null}
         activeTurnInProgress={false}
-        activeTurnStartedAt={null}
         scrollContainer={null}
         timelineEntries={[
           {

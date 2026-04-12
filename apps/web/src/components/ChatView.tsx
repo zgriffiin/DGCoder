@@ -14,6 +14,8 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ServerProvider,
   type ScopedThreadRef,
+  type ThreadProgressPhase,
+  type ThreadProgressSnapshot,
   type ThreadId,
   type TurnId,
   type KeybindingCommand,
@@ -212,12 +214,124 @@ import {
 } from "~/rpc/serverState";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { useAuthenticatedAssetUrl } from "~/hooks/useAuthenticatedAssetUrl";
+import { selectThreadProgress, useThreadProgressStore } from "../threadProgressStore";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
+
+const INTERRUPTIBLE_PROGRESS_PHASES = new Set<ThreadProgressPhase>([
+  "starting",
+  "agent_running",
+  "post_processing",
+]);
+
+function canInterruptProgressPhase(phase: ThreadProgressPhase | null | undefined): boolean {
+  return phase !== null && phase !== undefined && INTERRUPTIBLE_PROGRESS_PHASES.has(phase);
+}
+
+function shouldShowProgressTimer(phase: ThreadProgressPhase | null | undefined): boolean {
+  return (
+    phase === "starting" ||
+    phase === "agent_running" ||
+    phase === "post_processing" ||
+    phase === "recovering"
+  );
+}
+
+function progressLabelForPhase(phase: ThreadProgressPhase): string {
+  switch (phase) {
+    case "starting":
+      return "Agent starting";
+    case "agent_running":
+      return "Agent working";
+    case "waiting_approval":
+      return "Waiting for approval";
+    case "waiting_user_input":
+      return "Waiting for input";
+    case "post_processing":
+      return "Post-run checks";
+    case "recovering":
+      return "Resyncing with server";
+    case "ready":
+      return "Ready";
+    case "interrupted":
+      return "Interrupted";
+    case "error":
+      return "Error";
+    case "stopped":
+      return "Stopped";
+  }
+}
+
+function deriveFallbackThreadProgress(input: {
+  activeThread: Pick<ThreadProgressSnapshot, "threadId"> | null;
+  phase: SessionPhase;
+  hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  isRevertingCheckpoint: boolean;
+  activeTurnId: TurnId | null;
+}): ThreadProgressSnapshot | null {
+  if (!input.activeThread) {
+    return null;
+  }
+
+  let phase: ThreadProgressPhase | null = null;
+  if (input.isConnecting) {
+    phase = "recovering";
+  } else if (input.hasPendingApproval) {
+    phase = "waiting_approval";
+  } else if (input.hasPendingUserInput) {
+    phase = "waiting_user_input";
+  } else if (input.isRevertingCheckpoint) {
+    phase = "post_processing";
+  } else if (input.isSendBusy) {
+    phase = "starting";
+  } else if (input.phase === "running") {
+    phase = input.activeTurnId ? "agent_running" : "recovering";
+  } else if (input.phase === "connecting") {
+    phase = "starting";
+  }
+
+  if (!phase) {
+    return null;
+  }
+
+  return {
+    threadId: input.activeThread.threadId,
+    phase,
+    activeTurnId: input.activeTurnId,
+    postRunStages: [],
+    lastRuntimeEventType: null,
+    statusMessage: null,
+    updatedAt: new Date().toISOString(),
+    source: "client-recovery",
+  };
+}
+
+function deriveProgressTimerStartAt(
+  progress: ThreadProgressSnapshot | null,
+  fallbackStartedAt: string | null,
+): string | null {
+  if (!progress) {
+    return fallbackStartedAt;
+  }
+
+  switch (progress.phase) {
+    case "starting":
+    case "agent_running":
+      return fallbackStartedAt ?? progress.updatedAt;
+    case "post_processing":
+    case "recovering":
+      return progress.updatedAt;
+    default:
+      return null;
+  }
+}
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
@@ -956,6 +1070,9 @@ export default function ChatView(props: ChatViewProps) {
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
     [activeThread],
   );
+  const liveThreadProgress = useThreadProgressStore((state) =>
+    selectThreadProgress(state, activeThreadRef),
+  );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const existingOpenTerminalThreadKeys = useMemo(() => {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
@@ -1263,14 +1380,59 @@ export default function ChatView(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError: activeThread?.error,
   });
-  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
-  const [isInterruptPending, setIsInterruptPending] = useState(false);
-  const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
     localDispatchStartedAt,
   );
+  const fallbackThreadProgress = useMemo(
+    () =>
+      deriveFallbackThreadProgress({
+        activeThread: activeThread ? { threadId: activeThread.id } : null,
+        phase,
+        hasPendingApproval: activePendingApproval !== null,
+        hasPendingUserInput: activePendingUserInput !== null,
+        isSendBusy,
+        isConnecting,
+        isRevertingCheckpoint,
+        activeTurnId: activeLatestTurn?.turnId ?? null,
+      }),
+    [
+      activeLatestTurn?.turnId,
+      activePendingApproval,
+      activePendingUserInput,
+      activeThread,
+      isConnecting,
+      isRevertingCheckpoint,
+      isSendBusy,
+      phase,
+    ],
+  );
+  const effectiveThreadProgress = liveThreadProgress ?? fallbackThreadProgress;
+  const effectiveProgressPhase = effectiveThreadProgress?.phase ?? null;
+  const progressTimerStartedAt = deriveProgressTimerStartAt(
+    effectiveThreadProgress,
+    activeWorkStartedAt,
+  );
+  const showProgressTimer = shouldShowProgressTimer(effectiveProgressPhase);
+  const showProgressRow =
+    effectiveProgressPhase !== null &&
+    effectiveProgressPhase !== "ready" &&
+    effectiveProgressPhase !== "stopped" &&
+    effectiveProgressPhase !== "interrupted" &&
+    effectiveProgressPhase !== "error";
+  const progressState = showProgressRow
+    ? {
+        phase: effectiveProgressPhase,
+        label: progressLabelForPhase(effectiveProgressPhase),
+        statusMessage: effectiveThreadProgress?.statusMessage ?? null,
+        startedAt: progressTimerStartedAt,
+        showTimer: showProgressTimer,
+      }
+    : null;
+  const isProgressInterruptible = canInterruptProgressPhase(effectiveProgressPhase);
+  const [isInterruptPending, setIsInterruptPending] = useState(false);
+  const nowIso = new Date(nowTick).toISOString();
   const isComposerApprovalState = activePendingApproval !== null;
   const hasComposerHeader =
     isComposerApprovalState ||
@@ -1281,7 +1443,7 @@ export default function ChatView(props: ChatViewProps) {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
     }
-    if (phase === "running") {
+    if (isProgressInterruptible || isSendBusy) {
       return "running";
     }
     if (showPlanFollowUpPrompt) {
@@ -1294,8 +1456,8 @@ export default function ChatView(props: ChatViewProps) {
     composerSendState.hasSendableContent,
     isConnecting,
     isPreparingWorktree,
+    isProgressInterruptible,
     isSendBusy,
-    phase,
     prompt,
     showPlanFollowUpPrompt,
   ]);
@@ -2829,14 +2991,14 @@ export default function ChatView(props: ChatViewProps) {
   ]);
 
   useEffect(() => {
-    if (phase !== "running") return;
+    if (!showProgressTimer) return;
     const timer = window.setInterval(() => {
       setNowTick(Date.now());
     }, 1000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [phase]);
+  }, [showProgressTimer]);
 
   useEffect(() => {
     if (!activeThreadKey) return;
@@ -3057,7 +3219,7 @@ export default function ChatView(props: ChatViewProps) {
       const localApi = readLocalApi();
       if (!api || !localApi || !activeThread || isRevertingCheckpoint) return;
 
-      if (phase === "running" || isSendBusy || isConnecting) {
+      if (!latestTurnSettled || isSendBusy || isConnecting) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
@@ -3096,7 +3258,7 @@ export default function ChatView(props: ChatViewProps) {
       isConnecting,
       isRevertingCheckpoint,
       isSendBusy,
-      phase,
+      latestTurnSettled,
       setThreadError,
     ],
   );
@@ -3109,7 +3271,7 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    if (phase === "running") {
+    if (!latestTurnSettled || isProgressInterruptible || effectiveProgressPhase === "recovering") {
       return;
     }
     const promptForSend = promptRef.current;
@@ -4297,9 +4459,8 @@ export default function ChatView(props: ChatViewProps) {
               <MessagesTimeline
                 key={activeThread.id}
                 hasMessages={timelineEntries.length > 0}
-                isWorking={isWorking}
-                activeTurnInProgress={isWorking || !latestTurnSettled}
-                activeTurnStartedAt={activeWorkStartedAt}
+                progressState={progressState}
+                activeTurnInProgress={Boolean(progressState) || !latestTurnSettled}
                 scrollContainer={messagesScrollElement}
                 timelineEntries={timelineEntries}
                 completionDividerBeforeEntryId={completionDividerBeforeEntryId}
@@ -4695,7 +4856,7 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                               : null
                           }
-                          isInterruptible={phase === "running" || isSendBusy}
+                          isInterruptible={isProgressInterruptible || isSendBusy}
                           isInterruptPending={isInterruptPending}
                           showPlanFollowUpPrompt={
                             pendingUserInputs.length === 0 && showPlanFollowUpPrompt

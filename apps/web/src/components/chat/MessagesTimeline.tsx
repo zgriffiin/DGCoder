@@ -1,4 +1,9 @@
-import { type EnvironmentId, type MessageId, type TurnId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type MessageId,
+  type ThreadProgressPhase,
+  type TurnId,
+} from "@t3tools/contracts";
 import {
   memo,
   useCallback,
@@ -118,9 +123,14 @@ function TimelineAttachmentPreview({
 
 interface MessagesTimelineProps {
   hasMessages: boolean;
-  isWorking: boolean;
+  progressState: {
+    phase: ThreadProgressPhase;
+    label: string;
+    statusMessage: string | null;
+    startedAt: string | null;
+    showTimer: boolean;
+  } | null;
   activeTurnInProgress: boolean;
-  activeTurnStartedAt: string | null;
   scrollContainer: HTMLDivElement | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
@@ -154,9 +164,8 @@ interface MessagesTimelineProps {
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
-  isWorking,
+  progressState,
   activeTurnInProgress,
-  activeTurnStartedAt,
   scrollContainer,
   timelineEntries,
   completionDividerBeforeEntryId,
@@ -203,17 +212,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return () => {
       observer.disconnect();
     };
-  }, [hasMessages, isWorking]);
+  }, [hasMessages, progressState]);
 
   const rows = useMemo(
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
         completionDividerBeforeEntryId,
-        isWorking,
-        activeTurnStartedAt,
+        workingState: progressState,
       }),
-    [timelineEntries, completionDividerBeforeEntryId, isWorking, activeTurnStartedAt],
+    [timelineEntries, completionDividerBeforeEntryId, progressState],
   );
 
   const firstUnvirtualizedRowIndex = useMemo(() => {
@@ -221,7 +229,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (!activeTurnInProgress) return firstTailRowIndex;
 
     const turnStartedAtMs =
-      typeof activeTurnStartedAt === "string" ? Date.parse(activeTurnStartedAt) : Number.NaN;
+      typeof progressState?.startedAt === "string"
+        ? Date.parse(progressState.startedAt)
+        : Number.NaN;
     let firstCurrentTurnRowIndex = -1;
     if (!Number.isNaN(turnStartedAtMs)) {
       firstCurrentTurnRowIndex = rows.findIndex((row) => {
@@ -252,7 +262,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
 
     return Math.min(firstCurrentTurnRowIndex, firstTailRowIndex);
-  }, [activeTurnInProgress, activeTurnStartedAt, rows]);
+  }, [activeTurnInProgress, progressState?.startedAt, rows]);
 
   const virtualizedRowCount = clamp(firstUnvirtualizedRowIndex, {
     minimum: 0,
@@ -460,7 +470,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         type="button"
                         size="xs"
                         variant="outline"
-                        disabled={isRevertingCheckpoint || isWorking}
+                        disabled={isRevertingCheckpoint || activeTurnInProgress}
                         onClick={() => onRevertUserMessage(row.message.id)}
                         title="Revert to this message"
                       >
@@ -583,23 +593,34 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "working" && (
         <div className="py-0.5 pl-1.5">
           <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70">
-            <span className="inline-flex items-center gap-[3px]">
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
-            </span>
+            {row.showTimer ? (
+              <span className="inline-flex items-center gap-[3px]">
+                <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30" />
+                <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:200ms]" />
+                <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:400ms]" />
+              </span>
+            ) : (
+              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/35" />
+            )}
             <span>
-              {row.createdAt
-                ? `Working for ${formatWorkingTimer(row.createdAt, nowIso) ?? "0s"}`
-                : "Working..."}
+              {row.showTimer
+                ? row.createdAt
+                  ? `${row.label} for ${formatWorkingTimer(row.createdAt, nowIso) ?? "0s"}`
+                  : row.label
+                : row.label}
             </span>
           </div>
+          {row.statusMessage && row.statusMessage !== row.label ? (
+            <p className="pl-[18px] pt-1 text-[10px] leading-4 text-muted-foreground/55">
+              {row.statusMessage}
+            </p>
+          ) : null}
         </div>
       )}
     </div>
   );
 
-  if (!hasMessages && !isWorking) {
+  if (!hasMessages && !progressState) {
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-muted-foreground/30">

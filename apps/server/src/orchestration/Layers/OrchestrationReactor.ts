@@ -7,13 +7,16 @@ import {
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { ThreadProgressTracker } from "../Services/ThreadProgressTracker.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
   const providerCommandReactor = yield* ProviderCommandReactor;
   const checkpointReactor = yield* CheckpointReactor;
+  const threadProgressTracker = yield* ThreadProgressTracker;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
+    yield* threadProgressTracker.start();
     yield* providerRuntimeIngestion.start();
     yield* providerCommandReactor.start();
     yield* checkpointReactor.start();

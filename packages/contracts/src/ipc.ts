@@ -64,6 +64,8 @@ import type {
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
   OrchestrationReadModel,
+  ThreadProgressSnapshot,
+  ThreadProgressSnapshotMap,
 } from "./orchestration";
 import { EditorId } from "./editor";
 import { ServerSettings, ServerSettingsPatch } from "./settings";
@@ -242,6 +244,13 @@ export interface EnvironmentApi {
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     onDomainEvent: (
       callback: (event: OrchestrationEvent) => void,
+      options?: {
+        onResubscribe?: () => void;
+      },
+    ) => () => void;
+    getThreadProgressSnapshot: () => Promise<ThreadProgressSnapshotMap>;
+    onThreadProgress: (
+      callback: (snapshot: ThreadProgressSnapshot) => void,
       options?: {
         onResubscribe?: () => void;
       },

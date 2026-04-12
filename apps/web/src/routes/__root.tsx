@@ -5,6 +5,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  parseScopedThreadKey,
   scopedProjectKey,
   scopedThreadKey,
   scopeProjectRef,
@@ -52,6 +53,7 @@ import {
 } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { useTerminalStateStore } from "../terminalStateStore";
+import { useThreadProgressStore } from "../threadProgressStore";
 import { migrateLocalSettingsToServer } from "../hooks/useSettings";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
@@ -219,7 +221,29 @@ function coalesceOrchestrationUiEvents(
 
 const REPLAY_RECOVERY_RETRY_DELAY_MS = 100;
 const MAX_NO_PROGRESS_REPLAY_RETRIES = 3;
-const SNAPSHOT_STATUS_POLL_INTERVAL_MS = 30_000;
+const IDLE_SNAPSHOT_STATUS_POLL_INTERVAL_MS = 30_000;
+const ACTIVE_SNAPSHOT_STATUS_POLL_INTERVAL_MS = 5_000;
+
+function shouldUseActiveSnapshotPolling(environmentId: EnvironmentId): boolean {
+  const threadProgressState = useThreadProgressStore.getState();
+  const hasRecoveryOverlay = Object.entries(threadProgressState.recoveryOverlayByThreadKey).some(
+    ([threadKey]) => parseScopedThreadKey(threadKey)?.environmentId === environmentId,
+  );
+  if (hasRecoveryOverlay) {
+    return true;
+  }
+  return Object.entries(threadProgressState.progressByThreadKey).some(([threadKey, snapshot]) => {
+    if (parseScopedThreadKey(threadKey)?.environmentId !== environmentId) {
+      return false;
+    }
+    return (
+      snapshot.phase === "starting" ||
+      snapshot.phase === "agent_running" ||
+      snapshot.phase === "post_processing" ||
+      snapshot.phase === "recovering"
+    );
+  });
+}
 const RESUME_SNAPSHOT_RECOVERY_DEBOUNCE_MS = 5_000;
 
 function useRegisteredWsRpcClientEntries(): ReadonlyArray<WsRpcClientEntry> {
@@ -250,6 +274,10 @@ function EventRouter() {
     (store) => store.removeOrphanedTerminalStates,
   );
   const applyTerminalEvent = useTerminalStateStore((store) => store.applyTerminalEvent);
+  const syncThreadProgressSnapshot = useThreadProgressStore((store) => store.syncProgressSnapshot);
+  const applyThreadProgressUpdate = useThreadProgressStore((store) => store.applyProgressUpdate);
+  const setRecoveryOverlay = useThreadProgressStore((store) => store.setRecoveryOverlay);
+  const clearRecoveryOverlay = useThreadProgressStore((store) => store.clearRecoveryOverlay);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
@@ -427,6 +455,46 @@ function EventRouter() {
       },
     );
 
+    const setEnvironmentRecoveryOverlay = (
+      environmentId: EnvironmentId,
+      reason: "replay" | "snapshot",
+      detail?: string,
+    ) => {
+      const threads = selectThreadsAcrossEnvironments(useStore.getState()).filter(
+        (thread) => thread.environmentId === environmentId,
+      );
+      const activeThreads =
+        threads.filter(
+          (thread) =>
+            thread.session?.orchestrationStatus === "running" ||
+            thread.session?.orchestrationStatus === "starting",
+        ) || [];
+      const targets = activeThreads.length > 0 ? activeThreads : threads;
+      for (const thread of targets) {
+        setRecoveryOverlay({
+          threadRef: scopeThreadRef(environmentId, thread.id),
+          phase: "recovering",
+          activeTurnId: thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null,
+          statusMessage:
+            detail ??
+            (reason === "replay"
+              ? "Resyncing with server after missed live events."
+              : "Resyncing with server snapshot."),
+        });
+      }
+    };
+
+    const clearEnvironmentRecoveryOverlay = (environmentId: EnvironmentId) => {
+      const progressState = useThreadProgressStore.getState();
+      for (const threadKey of Object.keys(progressState.recoveryOverlayByThreadKey)) {
+        const parsed = parseScopedThreadKey(threadKey);
+        if (!parsed || parsed.environmentId !== environmentId) {
+          continue;
+        }
+        clearRecoveryOverlay(parsed);
+      }
+    };
+
     const applyEventBatch = (
       events: ReadonlyArray<OrchestrationEvent>,
       environmentId: EnvironmentId,
@@ -499,6 +567,7 @@ function EventRouter() {
         boundEnvironmentId = environmentId;
         bindWsRpcClientEntryEnvironment(entry.key, environmentId);
         schedulePendingDomainEventFlush();
+        scheduleSnapshotPoll();
       };
 
       const flushPendingDomainEvents = () => {
@@ -546,16 +615,29 @@ function EventRouter() {
         }
 
         try {
-          const snapshot = await entry.client.orchestration.getSnapshot();
+          const [snapshot, progressSnapshot] = await Promise.all([
+            entry.client.orchestration.getSnapshot(),
+            entry.client.orchestration.getThreadProgressSnapshot(),
+          ]);
           if (!disposed) {
             bindEnvironmentId(environmentId);
             syncServerReadModel(snapshot, environmentId);
+            syncThreadProgressSnapshot(environmentId, progressSnapshot);
+            clearEnvironmentRecoveryOverlay(environmentId);
             reconcileSnapshotDerivedState();
             if (recovery.completeSnapshotRecovery(snapshot.snapshotSequence)) {
               void runReplayRecovery("sequence-gap");
             }
           }
-        } catch {
+        } catch (error) {
+          if (!disposed) {
+            setEnvironmentRecoveryOverlay(
+              environmentId,
+              "snapshot",
+              error instanceof Error ? error.message : undefined,
+            );
+            void entry.client.reconnect().catch(() => undefined);
+          }
           recovery.failSnapshotRecovery();
         }
       };
@@ -583,9 +665,17 @@ function EventRouter() {
             }
             applyEventBatch(events, boundEnvironmentId, recovery);
           }
-        } catch {
+        } catch (error) {
           replayRetryTracker = null;
           recovery.failReplayRecovery();
+          if (!disposed && boundEnvironmentId !== null) {
+            setEnvironmentRecoveryOverlay(
+              boundEnvironmentId,
+              "replay",
+              error instanceof Error ? error.message : undefined,
+            );
+            void entry.client.reconnect().catch(() => undefined);
+          }
           void fallbackToSnapshotRecovery();
           return;
         }
@@ -648,12 +738,27 @@ function EventRouter() {
           })
           .catch(() => undefined);
       }
-      const snapshotPollInterval = window.setInterval(() => {
-        if (disposed || boundEnvironmentId === null) {
+      let snapshotPollTimeoutId: number | null = null;
+      const scheduleSnapshotPoll = () => {
+        if (snapshotPollTimeoutId !== null) {
+          window.clearTimeout(snapshotPollTimeoutId);
+        }
+        const environmentId = boundEnvironmentId;
+        if (disposed || environmentId === null) {
+          snapshotPollTimeoutId = null;
           return;
         }
-        void runSnapshotRecovery("poll", boundEnvironmentId);
-      }, SNAPSHOT_STATUS_POLL_INTERVAL_MS);
+        const intervalMs = shouldUseActiveSnapshotPolling(environmentId)
+          ? ACTIVE_SNAPSHOT_STATUS_POLL_INTERVAL_MS
+          : IDLE_SNAPSHOT_STATUS_POLL_INTERVAL_MS;
+        snapshotPollTimeoutId = window.setTimeout(() => {
+          if (!disposed && boundEnvironmentId !== null) {
+            void runSnapshotRecovery("poll", boundEnvironmentId);
+          }
+          scheduleSnapshotPoll();
+        }, intervalMs);
+      };
+      scheduleSnapshotPoll();
       const unsubDomainEvent = entry.client.orchestration.onDomainEvent(
         (event) => {
           const action = recovery.classifyDomainEvent(event.sequence);
@@ -674,6 +779,34 @@ function EventRouter() {
             }
             flushPendingDomainEvents();
             void runReplayRecovery("resubscribe");
+          },
+        },
+      );
+      const unsubThreadProgress = entry.client.orchestration.onThreadProgress(
+        (snapshot) => {
+          if (boundEnvironmentId === null) {
+            return;
+          }
+          applyThreadProgressUpdate(boundEnvironmentId, snapshot);
+          clearRecoveryOverlay(scopeThreadRef(boundEnvironmentId, snapshot.threadId));
+          scheduleSnapshotPoll();
+        },
+        {
+          onResubscribe: () => {
+            if (disposed || boundEnvironmentId === null) {
+              return;
+            }
+            setEnvironmentRecoveryOverlay(boundEnvironmentId, "snapshot");
+            void entry.client.orchestration
+              .getThreadProgressSnapshot()
+              .then((snapshotMap) => {
+                if (!disposed && boundEnvironmentId !== null) {
+                  syncThreadProgressSnapshot(boundEnvironmentId, snapshotMap);
+                  clearEnvironmentRecoveryOverlay(boundEnvironmentId);
+                  scheduleSnapshotPoll();
+                }
+              })
+              .catch(() => undefined);
           },
         },
       );
@@ -706,10 +839,13 @@ function EventRouter() {
           flushPendingDomainEventsScheduled = false;
           pendingDomainEvents.length = 0;
           unsubDomainEvent();
+          unsubThreadProgress();
           unsubTerminalEvent();
           unsubLifecycle();
           unsubConfig();
-          window.clearInterval(snapshotPollInterval);
+          if (snapshotPollTimeoutId !== null) {
+            window.clearTimeout(snapshotPollTimeoutId);
+          }
         },
       };
     });
@@ -792,10 +928,14 @@ function EventRouter() {
     removeOrphanedTerminalStates,
     applyTerminalEvent,
     clearThreadUi,
+    clearRecoveryOverlay,
     setProjectExpanded,
+    setRecoveryOverlay,
     setActiveEnvironmentId,
+    applyThreadProgressUpdate,
     syncProjects,
     syncServerReadModel,
+    syncThreadProgressSnapshot,
     syncThreads,
   ]);
 

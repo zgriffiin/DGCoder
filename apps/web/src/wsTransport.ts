@@ -34,6 +34,15 @@ interface TransportSession {
   readonly clientPromise: Promise<WsRpcProtocolClient>;
   readonly clientScope: Scope.Closeable;
   readonly runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
+  readonly closed: Promise<void>;
+  readonly resolveClosed: () => void;
+}
+
+class WsTransportRequestTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WsTransportRequestTimeoutError";
+  }
 }
 
 function formatErrorMessage(error: unknown): string {
@@ -58,7 +67,7 @@ export class WsTransport {
 
   async request<TSuccess>(
     execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
-    _options?: RequestOptions,
+    options?: RequestOptions,
   ): Promise<TSuccess> {
     if (this.disposed) {
       throw new Error("Transport disposed");
@@ -67,7 +76,28 @@ export class WsTransport {
     await this.tracingReady;
     const session = this.session;
     const client = await session.clientPromise;
-    return await session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    const requestPromise = session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    const sessionClosedPromise = session.closed.then<TSuccess>(() => {
+      throw new Error("Transport session closed");
+    });
+    const timeout =
+      options?.timeout === undefined ? undefined : Option.getOrUndefined(options.timeout);
+    const timeoutHandle =
+      timeout === undefined
+        ? null
+        : createTimeoutPromise(
+            Duration.toMillis(Duration.fromInputUnsafe(timeout)),
+            "WebSocket RPC request timed out.",
+          );
+    try {
+      return await Promise.race(
+        [requestPromise, sessionClosedPromise, timeoutHandle?.promise ?? null].filter(
+          (candidate): candidate is Promise<TSuccess> => candidate !== null,
+        ),
+      );
+    } finally {
+      timeoutHandle?.cancel();
+    }
   }
 
   async requestStream<TValue>(
@@ -186,6 +216,7 @@ export class WsTransport {
   }
 
   private closeSession(session: TransportSession) {
+    session.resolveClosed();
     return session.runtime.runPromise(Scope.close(session.clientScope, Exit.void)).finally(() => {
       session.runtime.dispose();
     });
@@ -196,10 +227,16 @@ export class WsTransport {
       Layer.mergeAll(createWsRpcProtocolLayer(this.url), ClientTracingLive),
     );
     const clientScope = runtime.runSync(Scope.make());
+    let resolveClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
     return {
       runtime,
       clientScope,
       clientPromise: runtime.runPromise(Scope.provide(clientScope)(makeWsRpcProtocolClient)),
+      closed,
+      resolveClosed,
     };
   }
 
@@ -262,4 +299,26 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function createTimeoutPromise<T>(
+  timeoutMs: number,
+  message: string,
+): {
+  readonly promise: Promise<T>;
+  readonly cancel: () => void;
+} {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  return {
+    promise: new Promise<T>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new WsTransportRequestTimeoutError(message));
+      }, timeoutMs);
+    }),
+    cancel: () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    },
+  };
 }

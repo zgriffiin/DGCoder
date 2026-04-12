@@ -154,9 +154,8 @@ function createBaseTimelineProps(input: {
 }): Omit<ComponentProps<typeof MessagesTimeline>, "scrollContainer" | "activeThreadEnvironmentId"> {
   return {
     hasMessages: true,
-    isWorking: false,
+    progressState: null,
     activeTurnInProgress: false,
-    activeTurnStartedAt: null,
     timelineEntries: deriveTimelineEntries(
       input.messages ?? [],
       input.proposedPlans ?? [],
@@ -541,8 +540,7 @@ async function measureTimelineRow(input: {
   const rows = deriveMessagesTimelineRows({
     timelineEntries: input.props.timelineEntries,
     completionDividerBeforeEntryId: input.props.completionDividerBeforeEntryId,
-    isWorking: input.props.isWorking,
-    activeTurnStartedAt: input.props.activeTurnStartedAt,
+    workingState: input.props.progressState,
   });
   const targetRow = rows.find((row) => row.id === input.targetRowId);
   expect(targetRow, `Unable to derive target row ${input.targetRowId}.`).toBeTruthy();

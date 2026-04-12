@@ -34,6 +34,7 @@ import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
+import { ThreadProgressTracker } from "../Services/ThreadProgressTracker.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
@@ -532,6 +533,7 @@ const make = Effect.fn("make")(function* () {
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const qualityGate = yield* QualityGateService;
+  const threadProgressTracker = yield* ThreadProgressTracker;
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -626,6 +628,14 @@ const make = Effect.fn("make")(function* () {
       return;
     }
 
+    yield* threadProgressTracker.markPostRunStageStart({
+      threadId: thread.id,
+      turnId,
+      stage: "quality_gate",
+      updatedAt: now,
+      lastRuntimeEventType: event.type,
+    });
+
     const readModel = yield* orchestrationEngine.getReadModel();
     const currentThread = readModel.threads.find((entry) => entry.id === thread.id) ?? thread;
     const workspaceCwd = resolveThreadWorkspaceCwd({
@@ -633,11 +643,27 @@ const make = Effect.fn("make")(function* () {
       projects: readModel.projects,
     });
     if (!workspaceCwd) {
+      yield* threadProgressTracker.markPostRunStageEnd({
+        threadId: thread.id,
+        turnId,
+        stage: "quality_gate",
+        updatedAt: now,
+        fallbackPhase: "ready",
+        lastRuntimeEventType: event.type,
+      });
       return;
     }
 
     const result = yield* qualityGate.evaluate({ cwd: workspaceCwd });
     if (result.status === "skipped") {
+      yield* threadProgressTracker.markPostRunStageEnd({
+        threadId: thread.id,
+        turnId,
+        stage: "quality_gate",
+        updatedAt: now,
+        fallbackPhase: "ready",
+        lastRuntimeEventType: event.type,
+      });
       return;
     }
 
@@ -655,6 +681,14 @@ const make = Effect.fn("make")(function* () {
             : "Validated project quality checks.",
         createdAt: now,
       });
+      yield* threadProgressTracker.markPostRunStageEnd({
+        threadId: thread.id,
+        turnId,
+        stage: "quality_gate",
+        updatedAt: now,
+        fallbackPhase: "ready",
+        lastRuntimeEventType: event.type,
+      });
       return;
     }
 
@@ -668,6 +702,14 @@ const make = Effect.fn("make")(function* () {
       summary: "Quality gate failed",
       detail,
       createdAt: now,
+    });
+    yield* threadProgressTracker.markThreadPhase({
+      threadId: thread.id,
+      phase: "error",
+      updatedAt: now,
+      activeTurnId: null,
+      statusMessage: "Quality gate failed. Fix the reported issues before continuing.",
+      lastRuntimeEventType: event.type,
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.session.set",
@@ -683,6 +725,15 @@ const make = Effect.fn("make")(function* () {
         updatedAt: now,
       },
       createdAt: now,
+    });
+    yield* threadProgressTracker.markPostRunStageEnd({
+      threadId: thread.id,
+      turnId,
+      stage: "quality_gate",
+      updatedAt: now,
+      fallbackPhase: "error",
+      statusMessage: "Quality gate failed. Fix the reported issues before continuing.",
+      lastRuntimeEventType: event.type,
     });
   });
 
@@ -786,6 +837,9 @@ const make = Effect.fn("make")(function* () {
 
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
+
+  const hasBufferedProposedPlan = (planId: string) =>
+    Cache.getOption(bufferedProposedPlanById, planId).pipe(Effect.map(Option.isSome));
 
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
@@ -1280,6 +1334,19 @@ const make = Effect.fn("make")(function* () {
       const turnId = toTurnId(event.turnId);
       if (turnId) {
         const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+        const bufferedPlanId = proposedPlanIdForTurn(thread.id, turnId);
+        const shouldTrackAssistantFinalize =
+          event.type === "turn.completed" &&
+          (assistantMessageIds.size > 0 || (yield* hasBufferedProposedPlan(bufferedPlanId)));
+        if (shouldTrackAssistantFinalize) {
+          yield* threadProgressTracker.markPostRunStageStart({
+            threadId: thread.id,
+            turnId,
+            stage: "assistant_finalize",
+            updatedAt: now,
+            lastRuntimeEventType: event.type,
+          });
+        }
         yield* Effect.forEach(
           assistantMessageIds,
           (assistantMessageId) =>
@@ -1302,7 +1369,6 @@ const make = Effect.fn("make")(function* () {
         ).pipe(Effect.asVoid);
         yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
 
-        const bufferedPlanId = proposedPlanIdForTurn(thread.id, turnId);
         if (event.type === "turn.completed") {
           yield* finalizeBufferedProposedPlan({
             event,
@@ -1314,6 +1380,16 @@ const make = Effect.fn("make")(function* () {
           });
         } else {
           yield* clearBufferedProposedPlan(bufferedPlanId);
+        }
+        if (shouldTrackAssistantFinalize) {
+          yield* threadProgressTracker.markPostRunStageEnd({
+            threadId: thread.id,
+            turnId,
+            stage: "assistant_finalize",
+            updatedAt: now,
+            fallbackPhase: "ready",
+            lastRuntimeEventType: event.type,
+          });
         }
       }
     }

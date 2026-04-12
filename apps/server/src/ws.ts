@@ -11,10 +11,12 @@ import {
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
+  OrchestrationReplayEventsError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
-  OrchestrationReplayEventsError,
+  THREAD_PROGRESS_WS_METHODS,
   ThreadId,
+  ThreadProgressGetSnapshotError,
   type TerminalEvent,
   WS_METHODS,
   WsRpcGroup,
@@ -44,6 +46,7 @@ import { Open, resolveAvailableEditors } from "./open";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ThreadProgressTracker } from "./orchestration/Services/ThreadProgressTracker";
 import {
   observeRpcEffect,
   observeRpcStream,
@@ -65,6 +68,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
   Effect.gen(function* () {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const threadProgressTracker = yield* ThreadProgressTracker;
     const checkpointDiffQuery = yield* CheckpointDiffQuery;
     const keybindings = yield* Keybindings;
     const open = yield* Open;
@@ -511,6 +515,20 @@ const WsRpcLayer = WsRpcGroup.toLayer(
           ),
           { "rpc.aggregate": "orchestration" },
         ),
+      [THREAD_PROGRESS_WS_METHODS.getSnapshot]: (_input) =>
+        observeRpcEffect(
+          THREAD_PROGRESS_WS_METHODS.getSnapshot,
+          threadProgressTracker.getSnapshot().pipe(
+            Effect.mapError(
+              (cause) =>
+                new ThreadProgressGetSnapshotError({
+                  message: "Failed to load thread progress snapshot",
+                  cause,
+                }),
+            ),
+          ),
+          { "rpc.aggregate": "threadProgress" },
+        ),
       [WS_METHODS.subscribeOrchestrationDomainEvents]: (_input) =>
         observeRpcStreamEffect(
           WS_METHODS.subscribeOrchestrationDomainEvents,
@@ -567,6 +585,12 @@ const WsRpcLayer = WsRpcGroup.toLayer(
             );
           }),
           { "rpc.aggregate": "orchestration" },
+        ),
+      [WS_METHODS.subscribeThreadProgress]: (_input) =>
+        observeRpcStream(
+          WS_METHODS.subscribeThreadProgress,
+          threadProgressTracker.streamSnapshots,
+          { "rpc.aggregate": "threadProgress" },
         ),
       [WS_METHODS.serverGetConfig]: (_input) =>
         observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
