@@ -49,7 +49,7 @@ interface CliAgentProviderConfig {
   readonly provider: Extract<ProviderKind, "kiro" | "amazonQ">;
   readonly displayName: string;
   readonly binaryName: string;
-  readonly builtInModels: ReadonlyArray<ServerProviderModel>;
+  readonly defaultModelName: string;
   readonly versionCommands: ReadonlyArray<ReadonlyArray<string>>;
   readonly authCommand: ReadonlyArray<string>;
   readonly loginCommand: string;
@@ -66,69 +66,92 @@ const DEFAULT_CLI_AGENT_MODEL_CAPABILITIES: ModelCapabilities = {
   promptInjectedEffortLevels: [],
 };
 
-const cliAgentBuiltInModels = (...models: ReadonlyArray<{ slug: string; name: string }>) =>
-  models.map((model) => ({
-    slug: model.slug,
-    name: model.name,
-    isCustom: false,
-    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
-  }));
-
-const AMAZON_Q_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = cliAgentBuiltInModels({
-  slug: "default",
-  name: "Amazon Q default",
-});
-
-const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = cliAgentBuiltInModels(
+const builtInModels = (name: string): ReadonlyArray<ServerProviderModel> => [
   {
     slug: "default",
-    name: "auto",
+    name,
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
+  },
+];
+
+// Kiro documents its CLI model catalog, but the CLI health probes do not expose
+// a stable machine-readable list. Keep this aligned with the official docs.
+const KIRO_DOCUMENTED_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
+  ...builtInModels("Kiro default"),
+  {
+    slug: "auto",
+    name: "Auto",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
     slug: "claude-opus-4.6",
-    name: "claude-opus-4.6",
-  },
-  {
-    slug: "claude-sonnet-4.6",
-    name: "claude-sonnet-4.6",
+    name: "Claude Opus 4.6",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
     slug: "claude-opus-4.5",
-    name: "claude-opus-4.5",
+    name: "Claude Opus 4.5",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
+  },
+  {
+    slug: "claude-sonnet-4.6",
+    name: "Claude Sonnet 4.6",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
     slug: "claude-sonnet-4.5",
-    name: "claude-sonnet-4.5",
+    name: "Claude Sonnet 4.5",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
-    slug: "claude-sonnet-4",
-    name: "claude-sonnet-4",
+    slug: "claude-sonnet-4.0",
+    name: "Claude Sonnet 4.0",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
     slug: "claude-haiku-4.5",
-    name: "claude-haiku-4.5",
-  },
-  {
-    slug: "deepseek-3.2",
-    name: "deepseek-3.2",
+    name: "Claude Haiku 4.5",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
     slug: "minimax-m2.5",
-    name: "minimax-m2.5",
-  },
-  {
-    slug: "minimax-m2.1",
-    name: "minimax-m2.1",
+    name: "MiniMax M2.5",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
     slug: "glm-5",
-    name: "glm-5",
+    name: "GLM-5",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
+  },
+  {
+    slug: "deepseek-3.2",
+    name: "DeepSeek 3.2",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
+  },
+  {
+    slug: "minimax-m2.1",
+    name: "MiniMax M2.1",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
   {
     slug: "qwen3-coder-next",
-    name: "qwen3-coder-next",
+    name: "Qwen3 Coder Next",
+    isCustom: false,
+    capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
   },
-);
+];
 
 const UNSUPPORTED_AUTH_COMMAND_MARKERS = [
   "unknown command",
@@ -511,7 +534,9 @@ export const checkCliAgentProviderStatus = Effect.fn("checkCliAgentProviderStatu
   const providerSettings = yield* getProviderSettings(config);
   const checkedAt = new Date().toISOString();
   const models = providerModelsFromSettings(
-    config.builtInModels,
+    config.provider === "kiro"
+      ? KIRO_DOCUMENTED_BUILT_IN_MODELS
+      : builtInModels(config.defaultModelName),
     config.provider,
     providerSettings.customModels,
     DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
@@ -560,7 +585,7 @@ export const KIRO_PROVIDER_CONFIG: CliAgentProviderConfig = {
   provider: "kiro",
   displayName: "Kiro",
   binaryName: "kiro-cli",
-  builtInModels: KIRO_BUILT_IN_MODELS,
+  defaultModelName: "Kiro default",
   versionCommands: [["--version"], ["version"]],
   authCommand: ["whoami", "--format", "json"],
   loginCommand: "kiro-cli login",
@@ -573,7 +598,7 @@ export const AMAZON_Q_PROVIDER_CONFIG: CliAgentProviderConfig = {
   provider: "amazonQ",
   displayName: "Amazon Q",
   binaryName: "q",
-  builtInModels: AMAZON_Q_BUILT_IN_MODELS,
+  defaultModelName: "Amazon Q default",
   versionCommands: [["--version"]],
   authCommand: ["whoami", "--format", "json"],
   loginCommand: "q login",

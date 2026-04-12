@@ -38,10 +38,10 @@ export interface CliAgentAdapterConfig {
   readonly provider: CliAgentProvider;
   readonly displayName: string;
   readonly selectCommandSettings: (settings: ServerSettings) => CliAgentCommandSettings;
-  readonly buildTurnArgs: (input: { readonly prompt: string }) => ReadonlyArray<string>;
-  readonly buildPreparationArgs?: (input: {
+  readonly buildTurnArgs: (input: {
+    readonly prompt: string;
     readonly model: string | undefined;
-  }) => ReadonlyArray<ReadonlyArray<string>>;
+  }) => ReadonlyArray<string>;
 }
 
 export interface CliAgentSessionContext {

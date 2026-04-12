@@ -14,16 +14,17 @@ import {
 const encoder = new TextEncoder();
 const KIRO_MODEL_SLUGS = [
   "default",
+  "auto",
   "claude-opus-4.6",
-  "claude-sonnet-4.6",
   "claude-opus-4.5",
+  "claude-sonnet-4.6",
   "claude-sonnet-4.5",
-  "claude-sonnet-4",
+  "claude-sonnet-4.0",
   "claude-haiku-4.5",
-  "deepseek-3.2",
   "minimax-m2.5",
-  "minimax-m2.1",
   "glm-5",
+  "deepseek-3.2",
+  "minimax-m2.1",
   "qwen3-coder-next",
 ] as const;
 
@@ -39,16 +40,6 @@ function mockHandle(result: { stdout: string; stderr: string; code: number }) {
     all: Stream.empty,
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
-  });
-}
-
-function buildKiroStatusSpawner() {
-  return mockSpawnerLayer((args) => {
-    if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
-      return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
-    if (matchesCliInvocation(args, "kiro-cli", ["whoami", "--format", "json"]))
-      return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
-    throw new Error(`Unexpected args: ${args.join(" ")}`);
   });
 }
 
@@ -108,27 +99,18 @@ describe("checkCliAgentProviderStatus readiness", () => {
         KIRO_MODEL_SLUGS,
       );
     }).pipe(
-      Effect.provide(Layer.mergeAll(ServerSettingsService.layerTest(), buildKiroStatusSpawner())),
-    ),
-  );
-
-  it.effect("surfaces Kiro auto as the default picker label", () =>
-    Effect.gen(function* () {
-      const status = yield* checkCliAgentProviderStatus(KIRO_PROVIDER_CONFIG);
-      assert.deepStrictEqual(status.models[0], {
-        slug: "default",
-        name: "auto",
-        isCustom: false,
-        capabilities: {
-          reasoningEffortLevels: [],
-          supportsFastMode: false,
-          supportsThinkingToggle: false,
-          contextWindowOptions: [],
-          promptInjectedEffortLevels: [],
-        },
-      });
-    }).pipe(
-      Effect.provide(Layer.mergeAll(ServerSettingsService.layerTest(), buildKiroStatusSpawner())),
+      Effect.provide(
+        Layer.mergeAll(
+          ServerSettingsService.layerTest(),
+          mockSpawnerLayer((args) => {
+            if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
+              return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
+            if (matchesCliInvocation(args, "kiro-cli", ["whoami", "--format", "json"]))
+              return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+      ),
     ),
   );
 

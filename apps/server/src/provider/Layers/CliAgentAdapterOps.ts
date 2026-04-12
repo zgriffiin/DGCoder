@@ -95,43 +95,18 @@ export const runCliAgentTurn = Effect.fn("runCliAgentTurn")(function* (input: Cl
     input.input.modelSelection?.provider === input.config.provider
       ? input.input.modelSelection.model
       : undefined;
-  const resolveCommand = (args: ReadonlyArray<string>) =>
-    resolveCliAgentCommand(
-      input.commandSettings,
-      args,
-      input.context.session.cwd ? { cwd: input.context.session.cwd } : {},
-    );
+  const args = input.config.buildTurnArgs({ prompt, model });
+  const commandSpec = resolveCliAgentCommand(
+    input.commandSettings,
+    args,
+    input.context.session.cwd ? { cwd: input.context.session.cwd } : {},
+  );
   const taskId = asTaskId(`cli:${input.turnId}`);
   const itemId = asItemId(`assistant:${input.turnId}`);
 
   yield* emitTaskStarted(input, taskId);
-  const preparationCommands = input.config.buildPreparationArgs?.({ model }) ?? [];
-  for (const args of preparationCommands) {
-    const preparation = yield* runCommand({
-      commandSpec: resolveCommand(args),
-    }).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, input.spawner),
-      Effect.result,
-    );
-    if (input.context.stopped) return;
-    if (preparation._tag === "Failure") {
-      yield* input.completeFailure(
-        toMessage(preparation.failure, `${input.config.displayName} CLI turn failed.`),
-      );
-      return;
-    }
-    if (preparation.success.code !== 0) {
-      const detail = trimOutput(`${preparation.success.stdout}\n${preparation.success.stderr}`);
-      yield* input.completeFailure(
-        detail
-          ? `${input.config.displayName} CLI model selection failed. ${detail}`
-          : `${input.config.displayName} CLI model selection failed.`,
-      );
-      return;
-    }
-  }
   const result = yield* runCommand({
-    commandSpec: resolveCommand(input.config.buildTurnArgs({ prompt })),
+    commandSpec,
   }).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, input.spawner),
     Effect.result,

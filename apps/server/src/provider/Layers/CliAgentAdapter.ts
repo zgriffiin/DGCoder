@@ -12,26 +12,6 @@ import {
   type CliAgentSessionContext,
 } from "./CliAgentAdapterRuntime";
 
-function buildCliChatArgs(prompt: string) {
-  return ["chat", "--no-interactive", "--trust-all-tools", prompt];
-}
-
-function normalizeKiroModel(model: string | undefined) {
-  const trimmed = model?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed === "default" ? "auto" : trimmed;
-}
-
-function buildKiroPreparationArgs(model: string | undefined) {
-  const selectedModel = normalizeKiroModel(model);
-  if (!selectedModel) {
-    return [];
-  }
-  return [["settings", "chat.defaultModel", selectedModel]];
-}
-
 function makeCliAgentAdapter(config: CliAgentAdapterConfig) {
   return Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
@@ -53,15 +33,20 @@ const KIRO_ADAPTER_CONFIG: CliAgentAdapterConfig = {
   provider: "kiro",
   displayName: "Kiro",
   selectCommandSettings: (settings) => settings.providers.kiro,
-  buildTurnArgs: ({ prompt }) => buildCliChatArgs(prompt),
-  buildPreparationArgs: ({ model }) => buildKiroPreparationArgs(model),
+  buildTurnArgs: ({ prompt, model }) => [
+    "chat",
+    "--no-interactive",
+    "--trust-all-tools",
+    ...(model && model !== "default" ? ["--model", model] : []),
+    prompt,
+  ],
 };
 
 const AMAZON_Q_ADAPTER_CONFIG: CliAgentAdapterConfig = {
   provider: "amazonQ",
   displayName: "Amazon Q",
   selectCommandSettings: (settings) => settings.providers.amazonQ,
-  buildTurnArgs: ({ prompt }) => buildCliChatArgs(prompt),
+  buildTurnArgs: ({ prompt }) => ["chat", "--no-interactive", "--trust-all-tools", prompt],
 };
 
 export const KiroAdapterLive = Layer.effect(
