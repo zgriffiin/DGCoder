@@ -49,7 +49,7 @@ interface CliAgentProviderConfig {
   readonly provider: Extract<ProviderKind, "kiro" | "amazonQ">;
   readonly displayName: string;
   readonly binaryName: string;
-  readonly defaultModelName: string;
+  readonly builtInModels: ReadonlyArray<ServerProviderModel>;
   readonly versionCommands: ReadonlyArray<ReadonlyArray<string>>;
   readonly authCommand: ReadonlyArray<string>;
   readonly loginCommand: string;
@@ -66,14 +66,69 @@ const DEFAULT_CLI_AGENT_MODEL_CAPABILITIES: ModelCapabilities = {
   promptInjectedEffortLevels: [],
 };
 
-const builtInModels = (name: string): ReadonlyArray<ServerProviderModel> => [
-  {
-    slug: "default",
-    name,
+const cliAgentBuiltInModels = (...models: ReadonlyArray<{ slug: string; name: string }>) =>
+  models.map((model) => ({
+    slug: model.slug,
+    name: model.name,
     isCustom: false,
     capabilities: DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
+  }));
+
+const AMAZON_Q_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = cliAgentBuiltInModels({
+  slug: "default",
+  name: "Amazon Q default",
+});
+
+const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = cliAgentBuiltInModels(
+  {
+    slug: "default",
+    name: "Kiro default",
   },
-];
+  {
+    slug: "claude-opus-4.6",
+    name: "claude-opus-4.6",
+  },
+  {
+    slug: "claude-sonnet-4.6",
+    name: "claude-sonnet-4.6",
+  },
+  {
+    slug: "claude-opus-4.5",
+    name: "claude-opus-4.5",
+  },
+  {
+    slug: "claude-sonnet-4.5",
+    name: "claude-sonnet-4.5",
+  },
+  {
+    slug: "claude-sonnet-4",
+    name: "claude-sonnet-4",
+  },
+  {
+    slug: "claude-haiku-4.5",
+    name: "claude-haiku-4.5",
+  },
+  {
+    slug: "deepseek-3.2",
+    name: "deepseek-3.2",
+  },
+  {
+    slug: "minimax-m2.5",
+    name: "minimax-m2.5",
+  },
+  {
+    slug: "minimax-m2.1",
+    name: "minimax-m2.1",
+  },
+  {
+    slug: "glm-5",
+    name: "glm-5",
+  },
+  {
+    slug: "qwen3-coder-next",
+    name: "qwen3-coder-next",
+  },
+);
 
 const UNSUPPORTED_AUTH_COMMAND_MARKERS = [
   "unknown command",
@@ -456,7 +511,7 @@ export const checkCliAgentProviderStatus = Effect.fn("checkCliAgentProviderStatu
   const providerSettings = yield* getProviderSettings(config);
   const checkedAt = new Date().toISOString();
   const models = providerModelsFromSettings(
-    builtInModels(config.defaultModelName),
+    config.builtInModels,
     config.provider,
     providerSettings.customModels,
     DEFAULT_CLI_AGENT_MODEL_CAPABILITIES,
@@ -505,7 +560,7 @@ export const KIRO_PROVIDER_CONFIG: CliAgentProviderConfig = {
   provider: "kiro",
   displayName: "Kiro",
   binaryName: "kiro-cli",
-  defaultModelName: "Kiro default",
+  builtInModels: KIRO_BUILT_IN_MODELS,
   versionCommands: [["--version"], ["version"]],
   authCommand: ["whoami", "--format", "json"],
   loginCommand: "kiro-cli login",
@@ -518,7 +573,7 @@ export const AMAZON_Q_PROVIDER_CONFIG: CliAgentProviderConfig = {
   provider: "amazonQ",
   displayName: "Amazon Q",
   binaryName: "q",
-  defaultModelName: "Amazon Q default",
+  builtInModels: AMAZON_Q_BUILT_IN_MODELS,
   versionCommands: [["--version"]],
   authCommand: ["whoami", "--format", "json"],
   loginCommand: "q login",

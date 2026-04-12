@@ -12,6 +12,20 @@ import {
 } from "./CliAgentProvider";
 
 const encoder = new TextEncoder();
+const KIRO_MODEL_SLUGS = [
+  "default",
+  "claude-opus-4.6",
+  "claude-sonnet-4.6",
+  "claude-opus-4.5",
+  "claude-sonnet-4.5",
+  "claude-sonnet-4",
+  "claude-haiku-4.5",
+  "deepseek-3.2",
+  "minimax-m2.5",
+  "minimax-m2.1",
+  "glm-5",
+  "qwen3-coder-next",
+] as const;
 
 function mockHandle(result: { stdout: string; stderr: string; code: number }) {
   return ChildProcessSpawner.makeHandle({
@@ -81,7 +95,7 @@ describe("checkCliAgentProviderStatus readiness", () => {
       assert.strictEqual(status.auth.status, "authenticated");
       assert.deepStrictEqual(
         status.models.map((model) => model.slug),
-        ["default"],
+        KIRO_MODEL_SLUGS,
       );
     }).pipe(
       Effect.provide(
