@@ -33,7 +33,13 @@ const KIRO_ADAPTER_CONFIG: CliAgentAdapterConfig = {
   provider: "kiro",
   displayName: "Kiro",
   selectCommandSettings: (settings) => settings.providers.kiro,
-  buildTurnArgs: ({ prompt }) => ["chat", "--no-interactive", "--trust-all-tools", prompt],
+  buildTurnArgs: ({ prompt, model }) => [
+    "chat",
+    "--no-interactive",
+    "--trust-all-tools",
+    ...(model && model !== "default" ? ["--model", model] : []),
+    prompt,
+  ],
 };
 
 const AMAZON_Q_ADAPTER_CONFIG: CliAgentAdapterConfig = {
