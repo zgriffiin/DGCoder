@@ -219,11 +219,13 @@ export class WsTransport {
     await this.closeSession(this.session);
   }
 
-  private closeSession(session: TransportSession) {
+  private async closeSession(session: TransportSession) {
     session.resolveClosed();
-    return session.runtime.runPromise(Scope.close(session.clientScope, Exit.void)).finally(() => {
-      session.runtime.dispose();
-    });
+    try {
+      await session.runtime.runPromise(Scope.close(session.clientScope, Exit.void));
+    } finally {
+      await session.runtime.dispose();
+    }
   }
 
   private createSession(): TransportSession {

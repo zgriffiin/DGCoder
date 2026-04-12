@@ -16,7 +16,6 @@ import {
   ProjectWriteFileError,
   THREAD_PROGRESS_WS_METHODS,
   ThreadId,
-  ThreadProgressGetSnapshotError,
   type TerminalEvent,
   WS_METHODS,
   WsRpcGroup,
@@ -518,15 +517,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
       [THREAD_PROGRESS_WS_METHODS.getSnapshot]: (_input) =>
         observeRpcEffect(
           THREAD_PROGRESS_WS_METHODS.getSnapshot,
-          threadProgressTracker.getSnapshot().pipe(
-            Effect.mapError(
-              (cause) =>
-                new ThreadProgressGetSnapshotError({
-                  message: "Failed to load thread progress snapshot",
-                  cause,
-                }),
-            ),
-          ),
+          threadProgressTracker.getSnapshot(),
           { "rpc.aggregate": "threadProgress" },
         ),
       [WS_METHODS.subscribeOrchestrationDomainEvents]: (_input) =>

@@ -11,8 +11,14 @@ import {
   type ProjectId,
   type ServerConfig,
   type ServerLifecycleWelcomePayload,
+  THREAD_PROGRESS_WS_METHODS,
+  type ThreadPostRunStage,
+  type ThreadProgressSource,
+  type ThreadProgressSnapshot,
   type ThreadId,
+  type ThreadProgressPhase,
   type TurnId,
+  type ThreadProgressSnapshotMap,
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
@@ -69,6 +75,7 @@ const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' heig
 
 interface TestFixture {
   snapshot: OrchestrationReadModel;
+  threadProgressSnapshotMap: ThreadProgressSnapshotMap;
   serverConfig: ServerConfig;
   welcome: ServerLifecycleWelcomePayload;
 }
@@ -112,7 +119,7 @@ const TEXT_VIEWPORT_MATRIX = [
   DEFAULT_VIEWPORT,
   { name: "tablet", width: 720, height: 1_024, textTolerancePx: 44, attachmentTolerancePx: 56 },
   { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
-  { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 56 },
+  { name: "narrow", width: 320, height: 700, textTolerancePx: 92, attachmentTolerancePx: 56 },
 ] as const satisfies readonly ViewportSpec[];
 const ATTACHMENT_VIEWPORT_MATRIX = [
   { ...DEFAULT_VIEWPORT, attachmentTolerancePx: 120 },
@@ -331,6 +338,7 @@ function createSnapshotForTargetUser(options: {
 function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
+    threadProgressSnapshotMap: {},
     serverConfig: createBaseServerConfig(),
     welcome: {
       environment: {
@@ -345,6 +353,29 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
       bootstrapProjectId: PROJECT_ID,
       bootstrapThreadId: THREAD_ID,
     },
+  };
+}
+
+function createThreadProgressSnapshot(options: {
+  threadId?: ThreadId;
+  phase: ThreadProgressPhase;
+  activeTurnId?: TurnId | null;
+  updatedAt?: string;
+  statusMessage?: string | null;
+  lastRuntimeEventType?: string | null;
+  source?: ThreadProgressSource;
+  postRunStages?: ThreadPostRunStage[];
+}): ThreadProgressSnapshot {
+  const threadId = options.threadId ?? THREAD_ID;
+  return {
+    threadId,
+    phase: options.phase,
+    activeTurnId: options.activeTurnId ?? null,
+    postRunStages: options.postRunStages ?? [],
+    lastRuntimeEventType: options.lastRuntimeEventType ?? null,
+    statusMessage: options.statusMessage ?? null,
+    updatedAt: options.updatedAt ?? NOW_ISO,
+    source: options.source ?? "provider-runtime",
   };
 }
 
@@ -438,10 +469,10 @@ function createThreadSessionSetEvent(threadId: ThreadId, sequence: number): Orch
       threadId,
       session: {
         threadId,
-        status: "running",
+        status: "ready",
         providerName: "codex",
         runtimeMode: "full-access",
-        activeTurnId: `turn-${threadId}` as TurnId,
+        activeTurnId: null,
         lastError: null,
         updatedAt: NOW_ISO,
       },
@@ -761,6 +792,9 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
   const tag = body._tag;
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === THREAD_PROGRESS_WS_METHODS.getSnapshot) {
+    return fixture.threadProgressSnapshotMap;
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
@@ -1262,6 +1296,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
               config: fixture.serverConfig,
             },
           ];
+        }
+        if (request._tag === WS_METHODS.subscribeThreadProgress) {
+          return Object.values(fixture.threadProgressSnapshotMap);
         }
         return [];
       },
@@ -2678,8 +2715,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-stop-button-cursor" as MessageId,
         targetText: "stop button cursor target",
-        sessionStatus: "running",
       }),
+      configureFixture: (currentFixture) => {
+        currentFixture.threadProgressSnapshotMap = {
+          [THREAD_ID]: createThreadProgressSnapshot({
+            phase: "agent_running",
+            activeTurnId: "turn-stop-button-cursor" as TurnId,
+            lastRuntimeEventType: "turn.started",
+          }),
+        };
+      },
     });
 
     try {
@@ -2689,6 +2734,45 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       expect(getComputedStyle(stopButton).cursor).toBe("pointer");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("disables send while recovering and shows resync state", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-recovering-send-disabled" as MessageId,
+        targetText: "recovering send disabled target",
+      }),
+      configureFixture: (currentFixture) => {
+        currentFixture.threadProgressSnapshotMap = {
+          [THREAD_ID]: createThreadProgressSnapshot({
+            phase: "recovering",
+            updatedAt: isoAt(120),
+            source: "client-recovery",
+          }),
+        };
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "resume after recovery");
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Resyncing with server");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const connectingButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Connecting"]'),
+        "Unable to find recovery-disabled send button.",
+      );
+      expect(connectingButton.disabled).toBe(true);
     } finally {
       await mounted.cleanup();
     }

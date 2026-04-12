@@ -286,7 +286,7 @@ function progressLabelForPhase(phase: ThreadProgressPhase): string {
 }
 
 function deriveFallbackThreadProgress(input: {
-  activeThread: Pick<ThreadProgressSnapshot, "threadId"> | null;
+  activeThreadId: ThreadId | null;
   phase: SessionPhase;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
@@ -294,8 +294,9 @@ function deriveFallbackThreadProgress(input: {
   isConnecting: boolean;
   isRevertingCheckpoint: boolean;
   activeTurnId: TurnId | null;
+  updatedAt: string;
 }): ThreadProgressSnapshot | null {
-  if (!input.activeThread) {
+  if (!input.activeThreadId) {
     return null;
   }
 
@@ -321,13 +322,13 @@ function deriveFallbackThreadProgress(input: {
   }
 
   return {
-    threadId: input.activeThread.threadId,
+    threadId: input.activeThreadId,
     phase,
     activeTurnId: input.activeTurnId,
     postRunStages: [],
     lastRuntimeEventType: null,
     statusMessage: null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: input.updatedAt,
     source: "client-recovery",
   };
 }
@@ -1404,23 +1405,47 @@ export default function ChatView(props: ChatViewProps) {
     activeThread?.session ?? null,
     localDispatchStartedAt,
   );
+  const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
+  const activePendingApprovalRequestId = activePendingApproval?.requestId ?? null;
+  const activePendingUserInputRequestId = activePendingUserInput?.requestId ?? null;
+  const fallbackProgressKey = [
+    activeThreadId ?? "",
+    activeLatestTurnId ?? "",
+    activePendingApprovalRequestId ?? "",
+    activePendingUserInputRequestId ?? "",
+    phase,
+    isSendBusy ? "1" : "0",
+    isConnecting ? "1" : "0",
+    isRevertingCheckpoint ? "1" : "0",
+  ].join("|");
+  const fallbackProgressUpdatedAtRef = useRef<{ key: string; updatedAt: string } | null>(null);
+  const fallbackProgressUpdatedAt =
+    fallbackProgressUpdatedAtRef.current?.key === fallbackProgressKey
+      ? fallbackProgressUpdatedAtRef.current.updatedAt
+      : new Date().toISOString();
+  fallbackProgressUpdatedAtRef.current = {
+    key: fallbackProgressKey,
+    updatedAt: fallbackProgressUpdatedAt,
+  };
   const fallbackThreadProgress = useMemo(
     () =>
       deriveFallbackThreadProgress({
-        activeThread: activeThread ? { threadId: activeThread.id } : null,
+        activeThreadId,
         phase,
-        hasPendingApproval: activePendingApproval !== null,
-        hasPendingUserInput: activePendingUserInput !== null,
+        hasPendingApproval: activePendingApprovalRequestId !== null,
+        hasPendingUserInput: activePendingUserInputRequestId !== null,
         isSendBusy,
         isConnecting,
         isRevertingCheckpoint,
-        activeTurnId: activeLatestTurn?.turnId ?? null,
+        activeTurnId: activeLatestTurnId,
+        updatedAt: fallbackProgressUpdatedAt,
       }),
     [
-      activeLatestTurn?.turnId,
-      activePendingApproval,
-      activePendingUserInput,
-      activeThread,
+      activeLatestTurnId,
+      activePendingApprovalRequestId,
+      activePendingUserInputRequestId,
+      activeThreadId,
+      fallbackProgressUpdatedAt,
       isConnecting,
       isRevertingCheckpoint,
       isSendBusy,
@@ -4883,8 +4908,8 @@ export default function ChatView(props: ChatViewProps) {
                             pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                           }
                           promptHasText={prompt.trim().length > 0}
-                          isSendBusy={isSendBusy}
-                          isConnecting={isConnecting}
+                          isSendBusy={isSendBusy || effectiveProgressPhase === "recovering"}
+                          isConnecting={isConnecting || effectiveProgressPhase === "recovering"}
                           isPreparingWorktree={isPreparingWorktree}
                           hasSendableContent={composerSendState.hasSendableContent}
                           onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}

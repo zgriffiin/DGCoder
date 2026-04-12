@@ -3,7 +3,7 @@ import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContex
 
 const ASSISTANT_CHARS_PER_LINE_FALLBACK = 72;
 const USER_CHARS_PER_LINE_FALLBACK = 56;
-const USER_LINE_HEIGHT_PX = 22;
+const USER_LINE_HEIGHT_PX = 20.25;
 const ASSISTANT_LINE_HEIGHT_PX = 22.75;
 // Assistant rows render as markdown content plus a compact timestamp meta line.
 // The DOM baseline is much smaller than the user bubble chrome, so model it
