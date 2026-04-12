@@ -43,6 +43,7 @@ import {
   readBackendLogTail,
 } from "./backendLogTail";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import { buildDesktopWindowFailurePageHtml } from "./desktopWindowFailure";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState";
 import {
@@ -90,6 +91,8 @@ const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
+const DESKTOP_MAIN_LOG_PATH = Path.join(LOG_DIR, "desktop-main.log");
+const SERVER_CHILD_LOG_PATH = Path.join(LOG_DIR, "server-child.log");
 const BACKEND_LOG_TAIL_MAX_LINES = 60;
 const FORCE_BACKEND_LOG_CAPTURE = process.env.T3CODE_SMOKE_TEST_CAPTURE_BACKEND === "1";
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
@@ -120,6 +123,7 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let backendObservabilitySettings = readPersistedBackendObservabilitySettings();
 let backendCrashLoopState = createBackendCrashLoopState();
+const fatalizedWindowIds = new Set<number>();
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const expectedBackendExitChildren = new WeakSet<ChildProcess.ChildProcess>();
@@ -330,27 +334,24 @@ function installStdIoCapture(): void {
 }
 
 function initializeDesktopLogging(): void {
-  if (!app.isPackaged && !FORCE_BACKEND_LOG_CAPTURE) {
-    return;
-  }
   try {
     desktopLogSink = new RotatingFileSink({
-      filePath: Path.join(LOG_DIR, "desktop-main.log"),
+      filePath: DESKTOP_MAIN_LOG_PATH,
       maxBytes: LOG_FILE_MAX_BYTES,
       maxFiles: LOG_FILE_MAX_FILES,
     });
     backendLogSink = new RotatingFileSink({
-      filePath: Path.join(LOG_DIR, "server-child.log"),
+      filePath: SERVER_CHILD_LOG_PATH,
       maxBytes: LOG_FILE_MAX_BYTES,
       maxFiles: LOG_FILE_MAX_FILES,
     });
-    if (app.isPackaged) {
+    if (app.isPackaged || FORCE_BACKEND_LOG_CAPTURE) {
       installStdIoCapture();
     }
     writeDesktopLogHeader(`runtime log capture enabled logDir=${LOG_DIR}`);
   } catch (error) {
     // Logging setup should never block app startup.
-    console.error("[desktop] failed to initialize packaged logging", error);
+    console.error("[desktop] failed to initialize desktop logging", error);
   }
 }
 
@@ -1094,7 +1095,7 @@ function scheduleBackendRestart(reason: string): void {
 }
 
 function buildBackendCrashLoopDialogMessage(latestExit: BackendUnexpectedExit): string {
-  const logPath = Path.join(LOG_DIR, "server-child.log");
+  const logPath = SERVER_CHILD_LOG_PATH;
   const lines = [
     `Automatic backend restarts stopped after repeated crashes inside ${BACKEND_CRASH_LOOP_WINDOW_MS / 1000}s.`,
     "",
@@ -1115,6 +1116,105 @@ function handleBackendCrashLoopDetected(latestExit: BackendUnexpectedExit): void
   const summary = `latestPid=${latestExit.pid ?? "unknown"} latestReason=${latestExit.reason} uptimeMs=${latestExit.uptimeMs}`;
   writeBackendCrashLoopSummary(summary, latestExit.lastErrorSnippet);
   dialog.showErrorBox("T3 Code backend crash loop", buildBackendCrashLoopDialogMessage(latestExit));
+}
+
+type DesktopWindowFailureInput = {
+  readonly heading: string;
+  readonly summary: string;
+  readonly detailLines: ReadonlyArray<string>;
+};
+
+function buildDesktopFailureDataUrl(input: DesktopWindowFailureInput): string {
+  const html = buildDesktopWindowFailurePageHtml({
+    appDisplayName: APP_DISPLAY_NAME,
+    heading: input.heading,
+    summary: input.summary,
+    detailLines: input.detailLines,
+    logPath: DESKTOP_MAIN_LOG_PATH,
+  });
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+function createFatalWindow(
+  sourceWindow: BrowserWindow | null,
+  input: DesktopWindowFailureInput,
+): BrowserWindow {
+  const bounds = sourceWindow && !sourceWindow.isDestroyed() ? sourceWindow.getBounds() : null;
+  const maximized =
+    sourceWindow && !sourceWindow.isDestroyed() ? sourceWindow.isMaximized() : false;
+  const fullScreen =
+    sourceWindow && !sourceWindow.isDestroyed() ? sourceWindow.isFullScreen() : false;
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
+    width: bounds?.width ?? 1100,
+    height: bounds?.height ?? 780,
+    minWidth: 840,
+    minHeight: 620,
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: "#0f1115",
+    ...getIconOption(),
+    title: APP_DISPLAY_NAME,
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 18 },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  };
+  if (bounds) {
+    windowOptions.x = bounds.x;
+    windowOptions.y = bounds.y;
+  }
+
+  const window = new BrowserWindow(windowOptions);
+
+  window.on("page-title-updated", (event) => {
+    event.preventDefault();
+    window.setTitle(APP_DISPLAY_NAME);
+  });
+  window.webContents.on("did-finish-load", () => {
+    window.setTitle(APP_DISPLAY_NAME);
+  });
+  window.once("ready-to-show", () => {
+    if (maximized) {
+      window.maximize();
+    }
+    if (fullScreen) {
+      window.setFullScreen(true);
+    }
+    window.show();
+  });
+  window.on("closed", () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+  });
+
+  void window.loadURL(buildDesktopFailureDataUrl(input)).catch((error) => {
+    writeDesktopLogHeader(`failed to load desktop fatal page message=${formatErrorMessage(error)}`);
+  });
+
+  return window;
+}
+
+function showWindowFatalState(window: BrowserWindow, input: DesktopWindowFailureInput): void {
+  if (fatalizedWindowIds.has(window.id)) {
+    return;
+  }
+  fatalizedWindowIds.add(window.id);
+  writeDesktopLogHeader(
+    `window fatal state heading=${sanitizeLogValue(input.heading)} summary=${sanitizeLogValue(input.summary)}`,
+  );
+
+  const fatalWindow = createFatalWindow(window, input);
+  if (mainWindow === window) {
+    mainWindow = fatalWindow;
+  }
+
+  if (!window.isDestroyed()) {
+    window.destroy();
+  }
 }
 
 function startBackend(): void {
@@ -1519,6 +1619,7 @@ function createWindow(): BrowserWindow {
     minHeight: 620,
     show: false,
     autoHideMenuBar: true,
+    backgroundColor: "#0f1115",
     ...getIconOption(),
     title: APP_DISPLAY_NAME,
     titleBarStyle: "hiddenInset",
@@ -1571,22 +1672,123 @@ function createWindow(): BrowserWindow {
     event.preventDefault();
     window.setTitle(APP_DISPLAY_NAME);
   });
+  window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    if (level < 2) {
+      return;
+    }
+    writeDesktopLogHeader(
+      `renderer console level=${level} line=${line} source=${sanitizeLogValue(sourceId)} message=${sanitizeLogValue(message)}`,
+    );
+  });
+  window.webContents.on("preload-error", (_event, preloadPath, error) => {
+    const message = formatErrorMessage(error);
+    writeDesktopLogHeader(
+      `preload error path=${sanitizeLogValue(preloadPath)} message=${sanitizeLogValue(message)}`,
+    );
+    showWindowFatalState(window, {
+      heading: "Desktop preload failed",
+      summary: "Preload script crashed before app UI finished bootstrapping.",
+      detailLines: [`Path: ${preloadPath}`, `Message: ${message}`],
+    });
+  });
+  const handleMainFrameLoadFailure = (
+    stage: "did-fail-load" | "did-fail-provisional-load",
+    errorCode: number,
+    errorDescription: string,
+    validatedUrl: string,
+    isMainFrame: boolean,
+  ) => {
+    if (!isMainFrame || validatedUrl.startsWith("data:text/html")) {
+      return;
+    }
+    writeDesktopLogHeader(
+      `window load failure stage=${stage} code=${errorCode} url=${sanitizeLogValue(validatedUrl)} message=${sanitizeLogValue(errorDescription)}`,
+    );
+    showWindowFatalState(window, {
+      heading: "Desktop page failed to load",
+      summary: isDevelopment
+        ? "Desktop shell could not load dev UI. Vite dev server may be unavailable or broken."
+        : "Desktop shell could not load bundled UI.",
+      detailLines: [
+        `Stage: ${stage}`,
+        `Error code: ${errorCode}`,
+        `Message: ${errorDescription}`,
+        `URL: ${validatedUrl}`,
+      ],
+    });
+  };
+  window.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      handleMainFrameLoadFailure(
+        "did-fail-load",
+        errorCode,
+        errorDescription,
+        validatedUrl,
+        isMainFrame,
+      );
+    },
+  );
+  window.webContents.on(
+    "did-fail-provisional-load",
+    (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      handleMainFrameLoadFailure(
+        "did-fail-provisional-load",
+        errorCode,
+        errorDescription,
+        validatedUrl,
+        isMainFrame,
+      );
+    },
+  );
+  window.webContents.on("render-process-gone", (_event, details) => {
+    const currentUrl = window.webContents.getURL() || "unknown";
+    writeDesktopLogHeader(
+      `renderer process gone reason=${details.reason} exitCode=${details.exitCode} url=${sanitizeLogValue(currentUrl)}`,
+    );
+    showWindowFatalState(window, {
+      heading: "Desktop renderer crashed",
+      summary: "Renderer process exited unexpectedly. App switched to fallback shell page.",
+      detailLines: [
+        `Reason: ${details.reason}`,
+        `Exit code: ${details.exitCode}`,
+        `URL: ${currentUrl}`,
+      ],
+    });
+  });
+  window.on("unresponsive", () => {
+    const currentUrl = window.webContents.getURL() || "unknown";
+    writeDesktopLogHeader(`window unresponsive url=${sanitizeLogValue(currentUrl)}`);
+    showWindowFatalState(window, {
+      heading: "Desktop window stopped responding",
+      summary: "Renderer became unresponsive. App switched to fallback shell page.",
+      detailLines: [`URL: ${currentUrl}`],
+    });
+  });
   window.webContents.on("did-finish-load", () => {
     window.setTitle(APP_DISPLAY_NAME);
     emitUpdateState();
+    writeDesktopLogHeader(
+      `window load complete url=${sanitizeLogValue(window.webContents.getURL() || "unknown")}`,
+    );
   });
   window.once("ready-to-show", () => {
     window.show();
   });
 
   if (isDevelopment) {
+    writeDesktopLogHeader(
+      `window loading dev url=${sanitizeLogValue(process.env.VITE_DEV_SERVER_URL as string)}`,
+    );
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
     window.webContents.openDevTools({ mode: "detach" });
   } else {
+    writeDesktopLogHeader(`window loading bundled url=${DESKTOP_SCHEME}://app/index.html`);
     void window.loadURL(`${DESKTOP_SCHEME}://app/index.html`);
   }
 
   window.on("closed", () => {
+    fatalizedWindowIds.delete(window.id);
     if (mainWindow === window) {
       mainWindow = null;
     }
@@ -1629,6 +1831,12 @@ async function bootstrap(): Promise<void> {
   mainWindow = createWindow();
   writeDesktopLogHeader("bootstrap main window created");
 }
+
+app.on("child-process-gone", (_event, details) => {
+  writeDesktopLogHeader(
+    `child process gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${sanitizeLogValue(details.name ?? "unknown")} serviceName=${sanitizeLogValue(details.serviceName ?? "unknown")}`,
+  );
+});
 
 app.on("before-quit", () => {
   isQuitting = true;
