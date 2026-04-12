@@ -9,6 +9,10 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import {
+  readRuntimeScriptEntries,
+  validateDesktopServerBundle,
+} from "./lib/desktopBundleValidation.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -647,6 +651,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+
+  const stagedServerDist = path.join(stageAppDir, "apps/server/dist");
+  yield* Effect.try({
+    try: () => validateDesktopServerBundle(readRuntimeScriptEntries(stagedServerDist)),
+    catch: (cause) =>
+      new BuildScriptError({
+        message: "Staged desktop server bundle is missing current provider support markers.",
+        cause,
+      }),
+  });
 
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 

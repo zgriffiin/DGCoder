@@ -29,6 +29,19 @@ import type { ContextMenuItem } from "@t3tools/contracts";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import {
+  BACKEND_CRASH_LOOP_WINDOW_MS,
+  BACKEND_HEALTHY_UPTIME_MS,
+  createBackendCrashLoopState,
+  markBackendHealthy,
+  recordUnexpectedBackendExit,
+  type BackendUnexpectedExit,
+} from "./backendCrashLoop";
+import {
+  appendBackendLogTailChunk,
+  createBackendLogTailState,
+  readBackendLogTail,
+} from "./backendLogTail";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState";
@@ -77,6 +90,8 @@ const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
+const BACKEND_LOG_TAIL_MAX_LINES = 60;
+const FORCE_BACKEND_LOG_CAPTURE = process.env.T3CODE_SMOKE_TEST_CAPTURE_BACKEND === "1";
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
 const SERVER_SETTINGS_PATH = Path.join(STATE_DIR, "settings.json");
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
@@ -96,6 +111,7 @@ let backendAuthToken = "";
 let backendWsUrl = "";
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
+let backendHealthyTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
 let desktopProtocolRegistered = false;
 let aboutCommitHashCache: string | null | undefined;
@@ -103,6 +119,7 @@ let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let backendObservabilitySettings = readPersistedBackendObservabilitySettings();
+let backendCrashLoopState = createBackendCrashLoopState();
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const expectedBackendExitChildren = new WeakSet<ChildProcess.ChildProcess>();
@@ -149,7 +166,37 @@ function backendChildEnv(): NodeJS.ProcessEnv {
   delete env.T3CODE_NO_BROWSER;
   delete env.T3CODE_HOST;
   delete env.T3CODE_DESKTOP_WS_URL;
+  delete env.T3CODE_SMOKE_TEST_BACKEND_PORT;
+  delete env.T3CODE_SMOKE_TEST_BACKEND_AUTH_TOKEN;
+  delete env.T3CODE_SMOKE_TEST_CAPTURE_BACKEND;
   return env;
+}
+
+function resolveBackendBootstrapOverrides(): {
+  readonly authToken: string;
+  readonly port: number;
+} | null {
+  const rawPort = process.env.T3CODE_SMOKE_TEST_BACKEND_PORT?.trim() ?? "";
+  const rawAuthToken = process.env.T3CODE_SMOKE_TEST_BACKEND_AUTH_TOKEN?.trim() ?? "";
+
+  if (rawPort.length === 0 && rawAuthToken.length === 0) {
+    return null;
+  }
+  if (rawPort.length === 0 || rawAuthToken.length === 0) {
+    throw new Error(
+      "Desktop smoke overrides require both T3CODE_SMOKE_TEST_BACKEND_PORT and T3CODE_SMOKE_TEST_BACKEND_AUTH_TOKEN.",
+    );
+  }
+
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`Desktop smoke backend port override is invalid: ${rawPort}`);
+  }
+
+  return {
+    authToken: rawAuthToken,
+    port,
+  };
 }
 
 function writeDesktopLogHeader(message: string): void {
@@ -162,6 +209,25 @@ function writeBackendSessionBoundary(phase: "START" | "END", details: string): v
   const normalizedDetails = sanitizeLogValue(details);
   backendLogSink.write(
     `[${logTimestamp()}] ---- APP SESSION ${phase} run=${APP_RUN_ID} ${normalizedDetails} ----\n`,
+  );
+}
+
+function writeBackendCrashLoopSummary(summary: string, lastErrorSnippet: string | null): void {
+  const normalizedSummary = sanitizeLogValue(summary);
+  writeDesktopLogHeader(`backend crash loop detected ${normalizedSummary}`);
+  if (!backendLogSink) {
+    return;
+  }
+
+  backendLogSink.write(
+    `[${logTimestamp()}] ---- BACKEND CRASH LOOP DETECTED run=${APP_RUN_ID} ${normalizedSummary} ----\n`,
+  );
+  if (!lastErrorSnippet) {
+    return;
+  }
+
+  backendLogSink.write(
+    `[${logTimestamp()}] Last backend output before automatic restart shutdown:\n${lastErrorSnippet}\n`,
   );
 }
 
@@ -215,6 +281,15 @@ function writeDesktopStreamChunk(
   }
 }
 
+function clearBackendHealthyTimer(): void {
+  if (backendHealthyTimer === null) {
+    return;
+  }
+
+  clearTimeout(backendHealthyTimer);
+  backendHealthyTimer = null;
+}
+
 function installStdIoCapture(): void {
   if (!app.isPackaged || desktopLogSink === null || restoreStdIoCapture !== null) {
     return;
@@ -254,8 +329,10 @@ function installStdIoCapture(): void {
   };
 }
 
-function initializePackagedLogging(): void {
-  if (!app.isPackaged) return;
+function initializeDesktopLogging(): void {
+  if (!app.isPackaged && !FORCE_BACKEND_LOG_CAPTURE) {
+    return;
+  }
   try {
     desktopLogSink = new RotatingFileSink({
       filePath: Path.join(LOG_DIR, "desktop-main.log"),
@@ -267,7 +344,9 @@ function initializePackagedLogging(): void {
       maxBytes: LOG_FILE_MAX_BYTES,
       maxFiles: LOG_FILE_MAX_FILES,
     });
-    installStdIoCapture();
+    if (app.isPackaged) {
+      installStdIoCapture();
+    }
     writeDesktopLogHeader(`runtime log capture enabled logDir=${LOG_DIR}`);
   } catch (error) {
     // Logging setup should never block app startup.
@@ -275,18 +354,26 @@ function initializePackagedLogging(): void {
   }
 }
 
-function captureBackendOutput(child: ChildProcess.ChildProcess): void {
-  if (!app.isPackaged || backendLogSink === null) return;
-  const writeChunk = (chunk: unknown): void => {
-    if (!backendLogSink) return;
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-    backendLogSink.write(buffer);
+function captureBackendOutput(
+  child: ChildProcess.ChildProcess,
+  onChunk?: (input: { readonly chunk: unknown; readonly streamName: "stderr" | "stdout" }) => void,
+): void {
+  const attachStream = (streamName: "stderr" | "stdout") => {
+    const stream = streamName === "stdout" ? child.stdout : child.stderr;
+    stream?.on("data", (chunk) => {
+      if (backendLogSink) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+        backendLogSink.write(buffer);
+      }
+      onChunk?.({ chunk, streamName });
+    });
   };
-  child.stdout?.on("data", writeChunk);
-  child.stderr?.on("data", writeChunk);
+
+  attachStream("stdout");
+  attachStream("stderr");
 }
 
-initializePackagedLogging();
+initializeDesktopLogging();
 
 if (process.platform === "linux") {
   app.commandLine.appendSwitch("class", LINUX_WM_CLASS);
@@ -997,12 +1084,37 @@ function scheduleBackendRestart(reason: string): void {
 
   const delayMs = Math.min(500 * 2 ** restartAttempt, 10_000);
   restartAttempt += 1;
+  writeDesktopLogHeader(`backend restart scheduled reason=${reason} delayMs=${delayMs}`);
   console.error(`[desktop] backend exited unexpectedly (${reason}); restarting in ${delayMs}ms`);
 
   restartTimer = setTimeout(() => {
     restartTimer = null;
     startBackend();
   }, delayMs);
+}
+
+function buildBackendCrashLoopDialogMessage(latestExit: BackendUnexpectedExit): string {
+  const logPath = Path.join(LOG_DIR, "server-child.log");
+  const lines = [
+    `Automatic backend restarts stopped after repeated crashes inside ${BACKEND_CRASH_LOOP_WINDOW_MS / 1000}s.`,
+    "",
+    `Latest exit: ${latestExit.reason}`,
+    `Latest pid: ${latestExit.pid ?? "unknown"}`,
+    `Latest uptime: ${latestExit.uptimeMs}ms`,
+    "",
+    "Last backend output:",
+    latestExit.lastErrorSnippet ?? "No backend output captured.",
+    "",
+    `Inspect: ${logPath}`,
+  ];
+
+  return lines.join("\n");
+}
+
+function handleBackendCrashLoopDetected(latestExit: BackendUnexpectedExit): void {
+  const summary = `latestPid=${latestExit.pid ?? "unknown"} latestReason=${latestExit.reason} uptimeMs=${latestExit.uptimeMs}`;
+  writeBackendCrashLoopSummary(summary, latestExit.lastErrorSnippet);
+  dialog.showErrorBox("T3 Code backend crash loop", buildBackendCrashLoopDialogMessage(latestExit));
 }
 
 function startBackend(): void {
@@ -1015,7 +1127,7 @@ function startBackend(): void {
     return;
   }
 
-  const captureBackendLogs = app.isPackaged && backendLogSink !== null;
+  const captureBackendLogs = app.isPackaged || FORCE_BACKEND_LOG_CAPTURE;
   const child = ChildProcess.spawn(process.execPath, [backendEntry, "--bootstrap-fd", "3"], {
     cwd: resolveBackendCwd(),
     // In Electron main, process.execPath points to the Electron binary.
@@ -1052,7 +1164,10 @@ function startBackend(): void {
     return;
   }
   backendProcess = child;
+  let backendLogTailState = createBackendLogTailState(BACKEND_LOG_TAIL_MAX_LINES);
   let backendSessionClosed = false;
+  let backendTerminationHandled = false;
+  const backendStartedAtMs = Date.now();
   const closeBackendSession = (details: string) => {
     if (backendSessionClosed) return;
     backendSessionClosed = true;
@@ -1062,35 +1177,83 @@ function startBackend(): void {
     "START",
     `pid=${child.pid ?? "unknown"} port=${backendPort} cwd=${resolveBackendCwd()}`,
   );
-  captureBackendOutput(child);
-
-  child.once("spawn", () => {
-    restartAttempt = 0;
+  captureBackendOutput(child, ({ chunk, streamName }) => {
+    backendLogTailState = appendBackendLogTailChunk(backendLogTailState, streamName, chunk);
   });
 
-  child.on("error", (error) => {
-    const wasExpected = expectedBackendExitChildren.has(child);
+  child.once("spawn", () => {
+    writeDesktopLogHeader(`backend child spawned pid=${child.pid ?? "unknown"}`);
+    clearBackendHealthyTimer();
+    backendHealthyTimer = setTimeout(() => {
+      backendHealthyTimer = null;
+      if (backendProcess !== child) {
+        return;
+      }
+
+      backendCrashLoopState = markBackendHealthy(backendCrashLoopState);
+      restartAttempt = 0;
+      writeDesktopLogHeader(
+        `backend marked healthy pid=${child.pid ?? "unknown"} uptimeMs=${BACKEND_HEALTHY_UPTIME_MS}`,
+      );
+    }, BACKEND_HEALTHY_UPTIME_MS);
+    backendHealthyTimer.unref();
+  });
+
+  const handleUnexpectedBackendTermination = (input: {
+    readonly details: string;
+    readonly reason: string;
+    readonly wasExpected: boolean;
+  }) => {
+    if (backendTerminationHandled) {
+      return;
+    }
+    backendTerminationHandled = true;
+    clearBackendHealthyTimer();
     if (backendProcess === child) {
       backendProcess = null;
     }
-    closeBackendSession(`pid=${child.pid ?? "unknown"} error=${error.message}`);
-    if (wasExpected) {
+    closeBackendSession(input.details);
+    writeDesktopLogHeader(
+      `backend child terminated expected=${input.wasExpected ? "yes" : "no"} ${input.details}`,
+    );
+    if (isQuitting || input.wasExpected) {
       return;
     }
-    scheduleBackendRestart(error.message);
+
+    const latestExit: BackendUnexpectedExit = {
+      atMs: Date.now(),
+      lastErrorSnippet: readBackendLogTail(backendLogTailState).trim() || null,
+      pid: child.pid ?? null,
+      reason: input.reason,
+      uptimeMs: Date.now() - backendStartedAtMs,
+    };
+    const decision = recordUnexpectedBackendExit(backendCrashLoopState, latestExit);
+    backendCrashLoopState = decision.state;
+    if (decision.shouldStopRestarting) {
+      handleBackendCrashLoopDetected(latestExit);
+      return;
+    }
+
+    scheduleBackendRestart(input.reason);
+  };
+
+  child.on("error", (error) => {
+    const wasExpected = expectedBackendExitChildren.has(child);
+    handleUnexpectedBackendTermination({
+      details: `pid=${child.pid ?? "unknown"} event=error expected=${wasExpected ? "yes" : "no"} error=${error.message}`,
+      reason: `error=${error.message}`,
+      wasExpected,
+    });
   });
 
   child.on("exit", (code, signal) => {
     const wasExpected = expectedBackendExitChildren.has(child);
-    if (backendProcess === child) {
-      backendProcess = null;
-    }
-    closeBackendSession(
-      `pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
-    );
-    if (isQuitting || wasExpected) return;
     const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
-    scheduleBackendRestart(reason);
+    handleUnexpectedBackendTermination({
+      details: `pid=${child.pid ?? "unknown"} event=exit expected=${wasExpected ? "yes" : "no"} ${reason}`,
+      reason,
+      wasExpected,
+    });
   });
 }
 
@@ -1099,6 +1262,7 @@ function stopBackend(): void {
     clearTimeout(restartTimer);
     restartTimer = null;
   }
+  clearBackendHealthyTimer();
 
   const child = backendProcess;
   backendProcess = null;
@@ -1120,6 +1284,7 @@ async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
     clearTimeout(restartTimer);
     restartTimer = null;
   }
+  clearBackendHealthyTimer();
 
   const child = backendProcess;
   backendProcess = null;
@@ -1439,13 +1604,20 @@ configureAppIdentity();
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
-  backendPort = await Effect.service(NetService).pipe(
-    Effect.flatMap((net) => net.reserveLoopbackPort()),
-    Effect.provide(NetService.layer),
-    Effect.runPromise,
-  );
-  writeDesktopLogHeader(`reserved backend port via NetService port=${backendPort}`);
-  backendAuthToken = Crypto.randomBytes(24).toString("hex");
+  const backendBootstrapOverrides = resolveBackendBootstrapOverrides();
+  if (backendBootstrapOverrides) {
+    backendPort = backendBootstrapOverrides.port;
+    backendAuthToken = backendBootstrapOverrides.authToken;
+    writeDesktopLogHeader(`using smoke backend overrides port=${backendPort}`);
+  } else {
+    backendPort = await Effect.service(NetService).pipe(
+      Effect.flatMap((net) => net.reserveLoopbackPort()),
+      Effect.provide(NetService.layer),
+      Effect.runPromise,
+    );
+    writeDesktopLogHeader(`reserved backend port via NetService port=${backendPort}`);
+    backendAuthToken = Crypto.randomBytes(24).toString("hex");
+  }
   const baseUrl = `ws://127.0.0.1:${backendPort}`;
   backendWsUrl = `${baseUrl}/?token=${encodeURIComponent(backendAuthToken)}`;
   writeDesktopLogHeader(`bootstrap resolved websocket endpoint baseUrl=${baseUrl}`);

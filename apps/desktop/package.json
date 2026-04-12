@@ -11,7 +11,7 @@
     "start": "bun run scripts/start-electron.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "smoke-test": "node scripts/smoke-test.mjs"
+    "smoke-test": "bun scripts/smoke-test.mjs"
   },
   "dependencies": {
     "effect": "catalog:",
@@ -19,6 +19,7 @@
     "electron-updater": "^6.6.2"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@types/node": "catalog:",

@@ -206,6 +206,16 @@ const GitStatusPr = Schema.Struct({
   state: GitStatusPrState,
 });
 
+export const GitStatusLocalReview = Schema.Struct({
+  configured: Schema.Boolean,
+  tool: Schema.Literal("coderabbit"),
+  enforceOn: Schema.Array(GitStackedAction),
+  commandPreview: Schema.String,
+  configPath: TrimmedNonEmptyStringSchema,
+  invalidReason: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type GitStatusLocalReview = typeof GitStatusLocalReview.Type;
+
 const GitStatusLocalShape = {
   isRepo: Schema.Boolean,
   hostingProvider: Schema.optional(GitHostingProvider),
@@ -213,6 +223,7 @@ const GitStatusLocalShape = {
   isDefaultBranch: Schema.Boolean,
   branch: Schema.NullOr(TrimmedNonEmptyStringSchema),
   hasWorkingTreeChanges: Schema.Boolean,
+  localReview: Schema.optional(GitStatusLocalReview),
   workingTree: Schema.Struct({
     files: Schema.Array(
       Schema.Struct({

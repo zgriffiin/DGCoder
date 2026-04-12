@@ -14,7 +14,9 @@ import {
   buildGitActionProgressStages,
   buildMenuItems,
   type CommitDialogAction,
+  getLocalReviewActionBlockReason,
   isCommitDialogAction,
+  isLocalReviewActionEnforced,
   type GitActionIconName,
   type GitActionMenuItem,
   type GitQuickAction,
@@ -124,6 +126,22 @@ function resolveProgressDescription(progress: ActiveGitActionProgress): string |
   return formatElapsedDescription(progress.hookStartedAtMs ?? progress.phaseStartedAtMs);
 }
 
+function toMenuAction(item: GitActionMenuItem): GitStackedAction | null {
+  if (item.kind !== "open_dialog" || !item.dialogAction) {
+    return null;
+  }
+  return item.dialogAction;
+}
+
+function formatLocalReviewActions(actions: ReadonlyArray<GitStackedAction>): string {
+  return actions
+    .map((action) => {
+      if (action === "create_pr") return "create PR";
+      return action.replaceAll("_", " + ");
+    })
+    .join(", ");
+}
+
 function getMenuActionDisabledReason({
   item,
   gitStatus,
@@ -138,6 +156,14 @@ function getMenuActionDisabledReason({
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
   if (!gitStatus) return "Git status is unavailable.";
+
+  const localReviewAction = toMenuAction(item);
+  const localReviewBlockReason = localReviewAction
+    ? getLocalReviewActionBlockReason(gitStatus.localReview, localReviewAction)
+    : null;
+  if (localReviewBlockReason) {
+    return localReviewBlockReason;
+  }
 
   const hasBranch = gitStatus.branch !== null;
   const hasChanges = gitStatus.hasWorkingTreeChanges;
@@ -313,7 +339,20 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
   );
   const isIntentMissing = requireIntent && dialogChangeIntent.trim().length === 0;
   const isValidationMissing = requireFunctionalValidation && dialogValidationCommands.length === 0;
-  const isCommitDialogSubmitDisabled = noneSelected || isIntentMissing || isValidationMissing;
+  const localReview = gitStatusForActions?.localReview ?? null;
+  const commitDialogLocalReviewEnforced = isLocalReviewActionEnforced(
+    localReview,
+    commitDialogAction,
+  );
+  const commitDialogLocalReviewBlockReason = getLocalReviewActionBlockReason(
+    localReview,
+    commitDialogAction,
+  );
+  const isCommitDialogSubmitDisabled =
+    noneSelected ||
+    isIntentMissing ||
+    isValidationMissing ||
+    commitDialogLocalReviewBlockReason !== null;
   const commitDialogCopy = useMemo(
     () =>
       resolveCommitDialogCopy({
@@ -372,15 +411,43 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
     return gitStatusForActions?.isDefaultBranch ?? false;
   }, [gitStatusForActions?.isDefaultBranch]);
 
-  const gitActionMenuItems = useMemo(
-    () => buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote),
-    [gitStatusForActions, hasOriginRemote, isGitActionRunning],
-  );
-  const quickAction = useMemo(
-    () =>
-      resolveQuickAction(gitStatusForActions, isGitActionRunning, isDefaultBranch, hasOriginRemote),
-    [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
-  );
+  const gitActionMenuItems = useMemo(() => {
+    const items = buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote);
+    return items.map((item) => {
+      const action = toMenuAction(item);
+      if (!action) {
+        return item;
+      }
+
+      const blockReason = getLocalReviewActionBlockReason(gitStatusForActions?.localReview, action);
+      if (!blockReason) {
+        return item;
+      }
+
+      return Object.assign({}, item, { disabled: true });
+    });
+  }, [gitStatusForActions, hasOriginRemote, isGitActionRunning]);
+  const quickAction = useMemo(() => {
+    const resolved = resolveQuickAction(
+      gitStatusForActions,
+      isGitActionRunning,
+      isDefaultBranch,
+      hasOriginRemote,
+    );
+    const action = resolved.kind === "run_action" ? resolved.action : undefined;
+    const blockReason = action
+      ? getLocalReviewActionBlockReason(gitStatusForActions?.localReview, action)
+      : null;
+    if (!blockReason) {
+      return resolved;
+    }
+
+    return {
+      ...resolved,
+      disabled: true,
+      hint: blockReason,
+    };
+  }, [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning]);
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")
     : null;
@@ -993,6 +1060,20 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
               {gitStatusError && (
                 <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
               )}
+              {gitStatusForActions?.localReview?.configured &&
+                gitStatusForActions.localReview.invalidReason === undefined && (
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                    Local CodeRabbit review enforced via{" "}
+                    <span className="font-mono">{gitStatusForActions.localReview.configPath}</span>{" "}
+                    on {formatLocalReviewActions(gitStatusForActions.localReview.enforceOn)}.
+                  </p>
+                )}
+              {gitStatusForActions?.localReview?.invalidReason && (
+                <p className="px-2 py-1.5 text-xs text-destructive">
+                  Local CodeRabbit review config invalid:{" "}
+                  {gitStatusForActions.localReview.invalidReason}
+                </p>
+              )}
             </MenuPopup>
           </Menu>
         </Group>
@@ -1130,6 +1211,33 @@ export default function GitActionsControl({ gitCwd, activeThreadRef }: GitAction
               </div>
             </div>
             <div className="space-y-1">
+              {commitDialogLocalReviewEnforced &&
+                commitDialogLocalReviewBlockReason === null &&
+                localReview && (
+                  <div className="rounded-lg border border-input bg-muted/40 p-3 text-xs">
+                    <p className="font-medium">Local review runs before this action.</p>
+                    <p className="text-muted-foreground">
+                      Tool: <span className="font-mono">{localReview.tool}</span>
+                    </p>
+                    <p className="text-muted-foreground">
+                      Config: <span className="font-mono">{localReview.configPath}</span>
+                    </p>
+                    <p className="text-muted-foreground">
+                      Enforced on: {formatLocalReviewActions(localReview.enforceOn)}
+                    </p>
+                  </div>
+                )}
+              {commitDialogLocalReviewBlockReason && (
+                <div className="rounded-lg border border-destructive/60 bg-destructive/5 p-3 text-xs text-destructive">
+                  <p className="font-medium">Local review blocked.</p>
+                  <p>{commitDialogLocalReviewBlockReason}</p>
+                  {localReview && (
+                    <p>
+                      Config: <span className="font-mono">{localReview.configPath}</span>
+                    </p>
+                  )}
+                </div>
+              )}
               <p className="text-xs font-medium">Intent{requireIntent ? " (required)" : ""}</p>
               <Textarea
                 value={dialogChangeIntent}

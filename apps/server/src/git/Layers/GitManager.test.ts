@@ -225,6 +225,31 @@ function initRepo(
   });
 }
 
+function writeProjectConfig(
+  cwd: string,
+  config:
+    | {
+        version: 1;
+        localReview?: {
+          tool: "coderabbit";
+          command: string;
+          args: string[];
+          enforceOn?: ReadonlyArray<
+            "commit" | "push" | "create_pr" | "commit_push" | "commit_push_pr"
+          >;
+          timeoutMs?: number;
+        };
+      }
+    | string,
+): void {
+  const configDir = path.join(cwd, ".t3code");
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, "project.json"),
+    typeof config === "string" ? config : JSON.stringify(config, null, 2),
+  );
+}
+
 function createBareRemote(): Effect.Effect<
   string,
   PlatformError.PlatformError | GitCommandError,
@@ -711,7 +736,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const status = yield* manager.status({ cwd });
 
-      expect(status).toEqual({
+      expect(status).toMatchObject({
         isRepo: false,
         hasOriginRemote: false,
         isDefaultBranch: false,
@@ -725,8 +750,17 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         hasUpstream: false,
         aheadCount: 0,
         behindCount: 0,
+        localReview: {
+          configured: false,
+          tool: "coderabbit",
+          enforceOn: [],
+          commandPreview: "",
+        },
         pr: null,
       });
+      expect(status.localReview?.configPath.toLowerCase()).toContain(
+        `${path.sep}.t3code${path.sep}project.json`.toLowerCase(),
+      );
     }),
   );
 
@@ -1084,6 +1118,49 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("status includes local review summary when repo config exists", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      writeProjectConfig(repoDir, {
+        version: 1,
+        localReview: {
+          tool: "coderabbit",
+          command: "coderabbit",
+          args: ["review", "--base", "{{defaultBranch}}", "-c", "docs/coderabbit-review.md"],
+          enforceOn: ["commit_push", "create_pr"],
+        },
+      });
+
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.localReview).toMatchObject({
+        configured: true,
+        tool: "coderabbit",
+        enforceOn: ["commit_push", "create_pr"],
+        commandPreview: "coderabbit review --base {{defaultBranch}} -c docs/coderabbit-review.md",
+      });
+      expect(status.localReview?.configPath.toLowerCase()).toContain(
+        `${path.sep}.t3code${path.sep}project.json`.toLowerCase(),
+      );
+    }),
+  );
+
+  it.effect("status reports invalid local review config reason", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      writeProjectConfig(repoDir, "{");
+
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.localReview?.configured).toBe(true);
+      expect(status.localReview?.invalidReason).toBeTruthy();
+    }),
+  );
+
   it.effect("creates a commit when working tree is dirty", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -1193,6 +1270,41 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("runs local review before manual validation commands for enforced commit actions", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nlocal-review-order\n");
+      const logPath = path.join(repoDir, "local-review.log").replace(/\\/g, "/");
+      writeProjectConfig(repoDir, {
+        version: 1,
+        localReview: {
+          tool: "coderabbit",
+          command: "node",
+          args: [
+            "-e",
+            "const fs=require('node:fs'); fs.appendFileSync(process.argv[1], `review:${process.argv[2]}\\n`);",
+            logPath,
+            "{{defaultBranch}}",
+          ],
+          enforceOn: ["commit"],
+        },
+      });
+
+      const { manager } = yield* makeManager();
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        validationCommands: [
+          `node -e "require('node:fs').appendFileSync('${logPath}', 'validation\\n')"`,
+        ],
+      });
+
+      expect(result.commit.status).toBe("created");
+      expect(fs.readFileSync(logPath, "utf8")).toBe("review:main\nvalidation\n");
+    }),
+  );
+
   it.effect("rejects commit actions that omit required intent or validation proof", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -1212,6 +1324,28 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(failure._tag).toBe("GitManagerError");
       expect(failure.message).toContain("Missing required change proof");
+    }),
+  );
+
+  it.effect("blocks enforced actions when local review config is invalid", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\ninvalid-local-review\n");
+      writeProjectConfig(repoDir, "{");
+
+      const { manager } = yield* makeManager();
+      const failure = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push",
+      }).pipe(Effect.flip);
+
+      expect(failure._tag).toBe("GitManagerError");
+      expect(failure.message).toContain("Local review config");
+      expect(failure.message).toContain(".t3code");
     }),
   );
 
@@ -2917,6 +3051,124 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             kind: "hook_started",
             hookName: "pre-commit",
           }),
+          expect.objectContaining({
+            kind: "action_failed",
+            phase: "commit",
+          }),
+        ]),
+      );
+    }),
+  );
+
+  it.effect("emits local review progress output through git progress events", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nlocal-review-progress\n");
+      writeProjectConfig(repoDir, {
+        version: 1,
+        localReview: {
+          tool: "coderabbit",
+          command: "node",
+          args: [
+            "-e",
+            "process.stdout.write('review stdout\\n'); process.stderr.write('review stderr\\n');",
+          ],
+          enforceOn: ["commit"],
+        },
+      });
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+
+      const result = yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+        },
+        {
+          actionId: "action-local-review",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      );
+
+      expect(result.commit.status).toBe("created");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "phase_started",
+            phase: "commit",
+            label: "Running CodeRabbit review...",
+          }),
+          expect.objectContaining({
+            kind: "hook_started",
+            hookName: "CodeRabbit review",
+          }),
+          expect.objectContaining({
+            kind: "hook_output",
+            hookName: "CodeRabbit review",
+            stream: "stdout",
+            text: "review stdout",
+          }),
+          expect.objectContaining({
+            kind: "hook_output",
+            hookName: "CodeRabbit review",
+            stream: "stderr",
+            text: "review stderr",
+          }),
+          expect.objectContaining({
+            kind: "hook_finished",
+            hookName: "CodeRabbit review",
+            exitCode: 0,
+          }),
+        ]),
+      );
+    }),
+  );
+
+  it.effect("emits action_failed with the local review phase when CodeRabbit review fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nlocal-review-failure\n");
+      writeProjectConfig(repoDir, {
+        version: 1,
+        localReview: {
+          tool: "coderabbit",
+          command: "node",
+          args: ["-e", "process.stderr.write('review failed\\n'); process.exit(2);"],
+          enforceOn: ["commit"],
+        },
+      });
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+
+      yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+        },
+        {
+          actionId: "action-local-review-failure",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      ).pipe(Effect.flip);
+
+      expect(events).toEqual(
+        expect.arrayContaining([
           expect.objectContaining({
             kind: "action_failed",
             phase: "commit",
