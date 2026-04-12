@@ -75,11 +75,6 @@ export class WsTransport {
 
     await this.tracingReady;
     const session = this.session;
-    const client = await session.clientPromise;
-    const requestPromise = session.runtime.runPromise(Effect.suspend(() => execute(client)));
-    const sessionClosedPromise = session.closed.then<TSuccess>(() => {
-      throw new Error("Transport session closed");
-    });
     const timeout =
       options?.timeout === undefined ? undefined : Option.getOrUndefined(options.timeout);
     const timeoutHandle =
@@ -89,7 +84,16 @@ export class WsTransport {
             Duration.toMillis(Duration.fromInputUnsafe(timeout)),
             "WebSocket RPC request timed out.",
           );
+    const sessionClosedPromise = session.closed.then<TSuccess>(() => {
+      throw new Error("Transport session closed");
+    });
     try {
+      const client = await Promise.race(
+        [session.clientPromise, sessionClosedPromise, timeoutHandle?.promise ?? null].filter(
+          (candidate): candidate is Promise<WsRpcProtocolClient> => candidate !== null,
+        ),
+      );
+      const requestPromise = session.runtime.runPromise(Effect.suspend(() => execute(client)));
       return await Promise.race(
         [requestPromise, sessionClosedPromise, timeoutHandle?.promise ?? null].filter(
           (candidate): candidate is Promise<TSuccess> => candidate !== null,

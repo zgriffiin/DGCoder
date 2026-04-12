@@ -15,7 +15,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Layer, Option, Stream } from "effect";
+import { Cache, Cause, Duration, Effect, Exit, Layer, Option, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -636,105 +636,110 @@ const make = Effect.fn("make")(function* () {
       lastRuntimeEventType: event.type,
     });
 
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const currentThread = readModel.threads.find((entry) => entry.id === thread.id) ?? thread;
-    const workspaceCwd = resolveThreadWorkspaceCwd({
-      thread: currentThread,
-      projects: readModel.projects,
-    });
-    if (!workspaceCwd) {
-      yield* threadProgressTracker.markPostRunStageEnd({
-        threadId: thread.id,
-        turnId,
-        stage: "quality_gate",
-        updatedAt: now,
-        fallbackPhase: "ready",
-        lastRuntimeEventType: event.type,
-      });
-      return;
-    }
+    const stageExit = yield* Effect.exit(
+      Effect.gen(function* () {
+        const readModel = yield* orchestrationEngine.getReadModel();
+        const currentThread = readModel.threads.find((entry) => entry.id === thread.id) ?? thread;
+        const workspaceCwd = resolveThreadWorkspaceCwd({
+          thread: currentThread,
+          projects: readModel.projects,
+        });
+        if (!workspaceCwd) {
+          return {
+            fallbackPhase: "ready" as const,
+            statusMessage: null,
+          };
+        }
 
-    const result = yield* qualityGate.evaluate({ cwd: workspaceCwd });
-    if (result.status === "skipped") {
-      yield* threadProgressTracker.markPostRunStageEnd({
-        threadId: thread.id,
-        turnId,
-        stage: "quality_gate",
-        updatedAt: now,
-        fallbackPhase: "ready",
-        lastRuntimeEventType: event.type,
-      });
-      return;
-    }
+        const result = yield* qualityGate.evaluate({ cwd: workspaceCwd });
+        if (result.status === "skipped") {
+          return {
+            fallbackPhase: "ready" as const,
+            statusMessage: null,
+          };
+        }
 
-    if (result.status === "passed") {
-      yield* appendQualityGateActivity({
-        event,
-        threadId: thread.id,
-        turnId,
-        tone: "info",
-        kind: QUALITY_GATE_PASSED_ACTIVITY_KIND,
-        summary: "Quality gate passed",
-        detail:
-          result.changedFiles.length > 0
-            ? `Validated ${result.changedFiles.length} changed file(s).`
-            : "Validated project quality checks.",
-        createdAt: now,
-      });
-      yield* threadProgressTracker.markPostRunStageEnd({
-        threadId: thread.id,
-        turnId,
-        stage: "quality_gate",
-        updatedAt: now,
-        fallbackPhase: "ready",
-        lastRuntimeEventType: event.type,
-      });
-      return;
-    }
+        if (result.status === "passed") {
+          yield* appendQualityGateActivity({
+            event,
+            threadId: thread.id,
+            turnId,
+            tone: "info",
+            kind: QUALITY_GATE_PASSED_ACTIVITY_KIND,
+            summary: "Quality gate passed",
+            detail:
+              result.changedFiles.length > 0
+                ? `Validated ${result.changedFiles.length} changed file(s).`
+                : "Validated project quality checks.",
+            createdAt: now,
+          });
+          return {
+            fallbackPhase: "ready" as const,
+            statusMessage: null,
+          };
+        }
 
-    const detail = formatQualityGateFailureDetail(result);
-    yield* appendQualityGateActivity({
-      event,
-      threadId: thread.id,
-      turnId,
-      tone: "error",
-      kind: QUALITY_GATE_FAILED_ACTIVITY_KIND,
-      summary: "Quality gate failed",
-      detail,
-      createdAt: now,
-    });
-    yield* threadProgressTracker.markThreadPhase({
-      threadId: thread.id,
-      phase: "error",
-      updatedAt: now,
-      activeTurnId: null,
-      statusMessage: "Quality gate failed. Fix the reported issues before continuing.",
-      lastRuntimeEventType: event.type,
-    });
-    yield* orchestrationEngine.dispatch({
-      type: "thread.session.set",
-      commandId: providerCommandId(event, "quality-gate-session-error"),
-      threadId: thread.id,
-      session: {
-        threadId: thread.id,
-        status: "error",
-        providerName: event.provider,
-        runtimeMode: currentThread.session?.runtimeMode ?? "full-access",
-        activeTurnId: null,
-        lastError: "Quality gate failed. Fix the reported issues before continuing.",
-        updatedAt: now,
-      },
-      createdAt: now,
+        const failureMessage = "Quality gate failed. Fix the reported issues before continuing.";
+        const detail = formatQualityGateFailureDetail(result);
+        yield* appendQualityGateActivity({
+          event,
+          threadId: thread.id,
+          turnId,
+          tone: "error",
+          kind: QUALITY_GATE_FAILED_ACTIVITY_KIND,
+          summary: "Quality gate failed",
+          detail,
+          createdAt: now,
+        });
+        yield* threadProgressTracker.markThreadPhase({
+          threadId: thread.id,
+          phase: "error",
+          updatedAt: now,
+          activeTurnId: null,
+          statusMessage: failureMessage,
+          lastRuntimeEventType: event.type,
+        });
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.set",
+          commandId: providerCommandId(event, "quality-gate-session-error"),
+          threadId: thread.id,
+          session: {
+            threadId: thread.id,
+            status: "error",
+            providerName: event.provider,
+            runtimeMode: currentThread.session?.runtimeMode ?? "full-access",
+            activeTurnId: null,
+            lastError: failureMessage,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        return {
+          fallbackPhase: "error" as const,
+          statusMessage: failureMessage,
+        };
+      }),
+    );
+
+    const stageEndInput = Exit.match(stageExit, {
+      onFailure: () => ({
+        fallbackPhase: "error" as const,
+        statusMessage: "Quality gate failed while finalizing post-run work.",
+      }),
+      onSuccess: (result) => result,
     });
     yield* threadProgressTracker.markPostRunStageEnd({
       threadId: thread.id,
       turnId,
       stage: "quality_gate",
       updatedAt: now,
-      fallbackPhase: "error",
-      statusMessage: "Quality gate failed. Fix the reported issues before continuing.",
+      fallbackPhase: stageEndInput.fallbackPhase,
+      statusMessage: stageEndInput.statusMessage,
       lastRuntimeEventType: event.type,
     });
+    if (Exit.isFailure(stageExit)) {
+      return yield* Effect.failCause(stageExit.cause);
+    }
   });
 
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
@@ -1347,49 +1352,69 @@ const make = Effect.fn("make")(function* () {
             lastRuntimeEventType: event.type,
           });
         }
-        yield* Effect.forEach(
-          assistantMessageIds,
-          (assistantMessageId) =>
-            finalizeAssistantMessage({
+        const finalizeAssistantEffect = Effect.gen(function* () {
+          yield* Effect.forEach(
+            assistantMessageIds,
+            (assistantMessageId) =>
+              finalizeAssistantMessage({
+                event,
+                threadId: thread.id,
+                messageId: assistantMessageId,
+                turnId,
+                createdAt: now,
+                commandTag:
+                  event.type === "turn.completed"
+                    ? "assistant-complete-finalize"
+                    : "assistant-complete-interrupted",
+                finalDeltaCommandTag:
+                  event.type === "turn.completed"
+                    ? "assistant-delta-finalize-fallback"
+                    : "assistant-delta-interrupted",
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
+          yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
+
+          if (event.type === "turn.completed") {
+            yield* finalizeBufferedProposedPlan({
               event,
               threadId: thread.id,
-              messageId: assistantMessageId,
+              threadProposedPlans: thread.proposedPlans,
+              planId: bufferedPlanId,
               turnId,
-              createdAt: now,
-              commandTag:
-                event.type === "turn.completed"
-                  ? "assistant-complete-finalize"
-                  : "assistant-complete-interrupted",
-              finalDeltaCommandTag:
-                event.type === "turn.completed"
-                  ? "assistant-delta-finalize-fallback"
-                  : "assistant-delta-interrupted",
-            }),
-          { concurrency: 1 },
-        ).pipe(Effect.asVoid);
-        yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
+              updatedAt: now,
+            });
+          } else {
+            yield* clearBufferedProposedPlan(bufferedPlanId);
+          }
+        });
 
-        if (event.type === "turn.completed") {
-          yield* finalizeBufferedProposedPlan({
-            event,
-            threadId: thread.id,
-            threadProposedPlans: thread.proposedPlans,
-            planId: bufferedPlanId,
-            turnId,
-            updatedAt: now,
-          });
-        } else {
-          yield* clearBufferedProposedPlan(bufferedPlanId);
-        }
         if (shouldTrackAssistantFinalize) {
+          const finalizeExit = yield* Effect.exit(finalizeAssistantEffect);
+          const stageEndInput = Exit.match(finalizeExit, {
+            onFailure: () => ({
+              fallbackPhase: "error" as const,
+              statusMessage: "Assistant finalization failed after agent completion.",
+            }),
+            onSuccess: () => ({
+              fallbackPhase: "ready" as const,
+              statusMessage: null,
+            }),
+          });
           yield* threadProgressTracker.markPostRunStageEnd({
             threadId: thread.id,
             turnId,
             stage: "assistant_finalize",
             updatedAt: now,
-            fallbackPhase: "ready",
+            fallbackPhase: stageEndInput.fallbackPhase,
+            statusMessage: stageEndInput.statusMessage,
             lastRuntimeEventType: event.type,
           });
+          if (Exit.isFailure(finalizeExit)) {
+            return yield* Effect.failCause(finalizeExit.cause);
+          }
+        } else {
+          yield* finalizeAssistantEffect;
         }
       }
     }
@@ -1486,10 +1511,16 @@ const make = Effect.fn("make")(function* () {
     ).pipe(Effect.asVoid);
   });
 
-  const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
+  const processDomainEvent = (
+    _event: TurnStartRequestedDomainEvent,
+  ): Effect.Effect<undefined, never, never> => Effect.succeed(undefined);
 
-  const processInput = (input: RuntimeIngestionInput) =>
-    input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);
+  const processInput = (input: RuntimeIngestionInput): ReturnType<typeof processRuntimeEvent> => {
+    if (input.source === "runtime") {
+      return processRuntimeEvent(input.event);
+    }
+    return processDomainEvent(input.event);
+  };
 
   const processInputSafely = (input: RuntimeIngestionInput) =>
     processInput(input).pipe(

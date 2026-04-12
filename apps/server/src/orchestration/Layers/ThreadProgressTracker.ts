@@ -127,23 +127,22 @@ export const makeThreadProgressTracker = Effect.gen(function* () {
     threadId: string,
     updater: (entry: ThreadProgressEntry | null) => ThreadProgressEntry | null,
   ) =>
-    Ref.get(state).pipe(
-      Effect.flatMap((current) => {
-        const previous = current[threadId] ?? null;
-        const next = updater(previous);
-        if (next === null) {
-          if (previous === null) {
-            return Effect.void;
-          }
-          const nextState = { ...current };
-          delete nextState[threadId];
-          return Ref.set(state, nextState);
+    Ref.modify(state, (current) => {
+      const previous = current[threadId] ?? null;
+      const next = updater(previous);
+      if (next === null) {
+        if (previous === null) {
+          return [Effect.void, current] as const;
         }
-        if (previous && snapshotsEqual(previous.snapshot, next.snapshot)) {
-          return Ref.set(state, { ...current, [threadId]: next });
-        }
-        return Ref.set(state, { ...current, [threadId]: next }).pipe(
-          Effect.flatMap(() => PubSub.publish(pubSub, next.snapshot)),
+        const nextState = { ...current };
+        delete nextState[threadId];
+        return [Effect.void, nextState] as const;
+      }
+      if (previous && snapshotsEqual(previous.snapshot, next.snapshot)) {
+        return [Effect.void, { ...current, [threadId]: next }] as const;
+      }
+      return [
+        PubSub.publish(pubSub, next.snapshot).pipe(
           Effect.asVoid,
           Effect.tap(() =>
             Effect.logDebug("thread progress updated", {
@@ -154,9 +153,10 @@ export const makeThreadProgressTracker = Effect.gen(function* () {
               lastRuntimeEventType: next.snapshot.lastRuntimeEventType,
             }),
           ),
-        );
-      }),
-    );
+        ),
+        { ...current, [threadId]: next },
+      ] as const;
+    }).pipe(Effect.flatten);
 
   const withSnapshot = (
     event: ProviderRuntimeEvent,

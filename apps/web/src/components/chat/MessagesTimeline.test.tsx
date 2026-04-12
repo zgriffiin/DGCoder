@@ -57,6 +57,7 @@ describe("MessagesTimeline", () => {
         hasMessages
         progressState={null}
         activeTurnInProgress={false}
+        checkpointActionsDisabled={false}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -110,6 +111,7 @@ describe("MessagesTimeline", () => {
         hasMessages
         progressState={null}
         activeTurnInProgress={false}
+        checkpointActionsDisabled={false}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -153,6 +155,7 @@ describe("MessagesTimeline", () => {
         hasMessages
         progressState={null}
         activeTurnInProgress={false}
+        checkpointActionsDisabled={false}
         scrollContainer={null}
         timelineEntries={[
           {
@@ -203,6 +206,7 @@ describe("MessagesTimeline", () => {
           showTimer: true,
         }}
         activeTurnInProgress
+        checkpointActionsDisabled
         scrollContainer={null}
         timelineEntries={[]}
         completionDividerBeforeEntryId={null}
@@ -240,6 +244,7 @@ describe("MessagesTimeline", () => {
           showTimer: false,
         }}
         activeTurnInProgress
+        checkpointActionsDisabled={false}
         scrollContainer={null}
         timelineEntries={[]}
         completionDividerBeforeEntryId={null}

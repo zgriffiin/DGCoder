@@ -156,6 +156,7 @@ function createBaseTimelineProps(input: {
     hasMessages: true,
     progressState: null,
     activeTurnInProgress: false,
+    checkpointActionsDisabled: false,
     timelineEntries: deriveTimelineEntries(
       input.messages ?? [],
       input.proposedPlans ?? [],

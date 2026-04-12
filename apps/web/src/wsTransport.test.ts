@@ -441,6 +441,27 @@ describe("WsTransport", () => {
     await transport.dispose();
   }, 2_000);
 
+  it("times out unary requests while the websocket handshake is still pending", async () => {
+    const transport = new WsTransport("ws://localhost:3020");
+
+    const requestPromise = transport.request(
+      (client) =>
+        client[WS_METHODS.serverUpsertKeybinding]({
+          command: "terminal.toggle",
+          key: "ctrl+k",
+        }),
+      { timeout: Option.some(Duration.millis(25)) },
+    );
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    await expect(requestPromise).rejects.toThrow("WebSocket RPC request timed out.");
+    expect(getSocket().sent).toHaveLength(0);
+    await transport.dispose();
+  }, 2_000);
+
   it("rejects in-flight unary requests when reconnect closes the active session", async () => {
     const transport = new WsTransport("ws://localhost:3020");
 

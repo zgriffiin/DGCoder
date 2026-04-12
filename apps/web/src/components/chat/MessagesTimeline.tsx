@@ -131,6 +131,7 @@ interface MessagesTimelineProps {
     showTimer: boolean;
   } | null;
   activeTurnInProgress: boolean;
+  checkpointActionsDisabled: boolean;
   scrollContainer: HTMLDivElement | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
@@ -166,6 +167,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
   progressState,
   activeTurnInProgress,
+  checkpointActionsDisabled,
   scrollContainer,
   timelineEntries,
   completionDividerBeforeEntryId,
@@ -470,7 +472,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         type="button"
                         size="xs"
                         variant="outline"
-                        disabled={isRevertingCheckpoint || activeTurnInProgress}
+                        disabled={isRevertingCheckpoint || checkpointActionsDisabled}
                         onClick={() => onRevertUserMessage(row.message.id)}
                         title="Revert to this message"
                       >

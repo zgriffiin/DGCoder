@@ -587,9 +587,13 @@ const WsRpcLayer = WsRpcGroup.toLayer(
           { "rpc.aggregate": "orchestration" },
         ),
       [WS_METHODS.subscribeThreadProgress]: (_input) =>
-        observeRpcStream(
+        observeRpcStreamEffect(
           WS_METHODS.subscribeThreadProgress,
-          threadProgressTracker.streamSnapshots,
+          Effect.gen(function* () {
+            const snapshot = yield* threadProgressTracker.getSnapshot();
+            const initialStream = Stream.fromIterable(Object.values(snapshot));
+            return Stream.concat(initialStream, threadProgressTracker.streamSnapshots);
+          }),
           { "rpc.aggregate": "threadProgress" },
         ),
       [WS_METHODS.serverGetConfig]: (_input) =>

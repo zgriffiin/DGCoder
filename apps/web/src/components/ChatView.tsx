@@ -227,9 +227,28 @@ const INTERRUPTIBLE_PROGRESS_PHASES = new Set<ThreadProgressPhase>([
   "agent_running",
   "post_processing",
 ]);
+const ACTIVE_OUTPUT_PROGRESS_PHASES = new Set<ThreadProgressPhase>(["starting", "agent_running"]);
+const CHECKPOINT_ACTION_BLOCKED_PROGRESS_PHASES = new Set<ThreadProgressPhase>([
+  "starting",
+  "agent_running",
+  "post_processing",
+  "recovering",
+]);
 
 function canInterruptProgressPhase(phase: ThreadProgressPhase | null | undefined): boolean {
   return phase !== null && phase !== undefined && INTERRUPTIBLE_PROGRESS_PHASES.has(phase);
+}
+
+function isActiveOutputProgressPhase(phase: ThreadProgressPhase | null | undefined): boolean {
+  return phase !== null && phase !== undefined && ACTIVE_OUTPUT_PROGRESS_PHASES.has(phase);
+}
+
+function isCheckpointActionBlockedProgressPhase(
+  phase: ThreadProgressPhase | null | undefined,
+): boolean {
+  return (
+    phase !== null && phase !== undefined && CHECKPOINT_ACTION_BLOCKED_PROGRESS_PHASES.has(phase)
+  );
 }
 
 function shouldShowProgressTimer(phase: ThreadProgressPhase | null | undefined): boolean {
@@ -1431,6 +1450,15 @@ export default function ChatView(props: ChatViewProps) {
       }
     : null;
   const isProgressInterruptible = canInterruptProgressPhase(effectiveProgressPhase);
+  const isActiveOutputInProgress =
+    isActiveOutputProgressPhase(effectiveProgressPhase) ||
+    (effectiveProgressPhase === null && !latestTurnSettled);
+  const checkpointActionsDisabled =
+    isRevertingCheckpoint ||
+    !latestTurnSettled ||
+    isSendBusy ||
+    isConnecting ||
+    isCheckpointActionBlockedProgressPhase(effectiveProgressPhase);
   const [isInterruptPending, setIsInterruptPending] = useState(false);
   const nowIso = new Date(nowTick).toISOString();
   const isComposerApprovalState = activePendingApproval !== null;
@@ -3219,7 +3247,7 @@ export default function ChatView(props: ChatViewProps) {
       const localApi = readLocalApi();
       if (!api || !localApi || !activeThread || isRevertingCheckpoint) return;
 
-      if (!latestTurnSettled || isSendBusy || isConnecting) {
+      if (checkpointActionsDisabled) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
@@ -3252,15 +3280,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       setIsRevertingCheckpoint(false);
     },
-    [
-      activeThread,
-      environmentId,
-      isConnecting,
-      isRevertingCheckpoint,
-      isSendBusy,
-      latestTurnSettled,
-      setThreadError,
-    ],
+    [activeThread, checkpointActionsDisabled, environmentId, isRevertingCheckpoint, setThreadError],
   );
 
   const onSend = async (e?: { preventDefault: () => void }) => {
@@ -4460,7 +4480,8 @@ export default function ChatView(props: ChatViewProps) {
                 key={activeThread.id}
                 hasMessages={timelineEntries.length > 0}
                 progressState={progressState}
-                activeTurnInProgress={Boolean(progressState) || !latestTurnSettled}
+                activeTurnInProgress={isActiveOutputInProgress}
+                checkpointActionsDisabled={checkpointActionsDisabled}
                 scrollContainer={messagesScrollElement}
                 timelineEntries={timelineEntries}
                 completionDividerBeforeEntryId={completionDividerBeforeEntryId}
