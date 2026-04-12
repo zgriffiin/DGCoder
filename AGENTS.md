@@ -4,6 +4,7 @@
 
 - All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- When opening a pull request, make it ready for review by default so CI starts immediately. Only open a draft PR if the user explicitly asks for draft.
 
 ## Project Snapshot
 
