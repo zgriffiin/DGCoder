@@ -4,6 +4,17 @@ import { readWsRpcClientEntryForEnvironment, WsRpcClient } from "./wsRpcClient";
 
 export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
   return {
+    pi: {
+      getRuntime: rpcClient.pi.getRuntime,
+      refreshRuntime: rpcClient.pi.refreshRuntime,
+      listThreads: () => rpcClient.pi.listThreads().then((threads) => [...threads]),
+      getThread: rpcClient.pi.getThread,
+      createThread: rpcClient.pi.createThread,
+      sendPrompt: rpcClient.pi.sendPrompt,
+      setThreadModel: rpcClient.pi.setThreadModel,
+      abortThread: rpcClient.pi.abortThread,
+      onEvent: (callback, options) => rpcClient.pi.onEvent(callback, options),
+    },
     terminal: {
       open: (input) => rpcClient.terminal.open(input as never),
       write: (input) => rpcClient.terminal.write(input as never),

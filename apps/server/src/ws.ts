@@ -51,7 +51,6 @@ import {
   observeRpcStream,
   observeRpcStreamEffect,
 } from "./observability/RpcInstrumentation";
-import { ProviderRegistry } from "./provider/Services/ProviderRegistry";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -62,6 +61,7 @@ import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePat
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
+import { PiRuntime } from "./pi/Services/PiRuntime";
 
 const WsRpcLayer = WsRpcGroup.toLayer(
   Effect.gen(function* () {
@@ -75,7 +75,6 @@ const WsRpcLayer = WsRpcGroup.toLayer(
     const git = yield* GitCore;
     const gitStatusBroadcaster = yield* GitStatusBroadcaster;
     const terminalManager = yield* TerminalManager;
-    const providerRegistry = yield* ProviderRegistry;
     const config = yield* ServerConfig;
     const lifecycleEvents = yield* ServerLifecycleEvents;
     const serverSettings = yield* ServerSettingsService;
@@ -85,6 +84,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
     const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
     const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
     const serverEnvironment = yield* ServerEnvironment;
+    const piRuntime = yield* PiRuntime;
     const serverCommandId = (tag: string) =>
       CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
@@ -174,7 +174,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
     const enrichOrchestrationEvents = (events: ReadonlyArray<OrchestrationEvent>) =>
       Effect.forEach(events, enrichProjectEvent, { concurrency: 4 });
 
-    const dispatchBootstrapTurnStart = (
+    const _dispatchBootstrapTurnStart = (
       command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
     ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
       Effect.gen(function* () {
@@ -366,16 +366,22 @@ const WsRpcLayer = WsRpcGroup.toLayer(
     const dispatchNormalizedCommand = (
       normalizedCommand: OrchestrationCommand,
     ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-      const dispatchEffect =
-        normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-          ? dispatchBootstrapTurnStart(normalizedCommand)
-          : orchestrationEngine
-              .dispatch(normalizedCommand)
-              .pipe(
-                Effect.mapError((cause) =>
-                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                ),
-              );
+      if (normalizedCommand.type === "thread.turn.start") {
+        return Effect.fail(
+          new OrchestrationDispatchCommandError({
+            message:
+              "Legacy T3 provider turns have been disabled. This composer is still wired to the old orchestration path instead of the Pi runtime.",
+          }),
+        );
+      }
+
+      const dispatchEffect = orchestrationEngine
+        .dispatch(normalizedCommand)
+        .pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+          ),
+        );
 
       return startup
         .enqueueCommand(dispatchEffect)
@@ -388,7 +394,6 @@ const WsRpcLayer = WsRpcGroup.toLayer(
 
     const loadServerConfig = Effect.gen(function* () {
       const keybindingsConfig = yield* keybindings.loadConfigState;
-      const providers = yield* providerRegistry.getProviders;
       const settings = yield* serverSettings.getSettings;
       const environment = yield* serverEnvironment.getDescriptor;
 
@@ -398,7 +403,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
         keybindingsConfigPath: config.keybindingsConfigPath,
         keybindings: keybindingsConfig.keybindings,
         issues: keybindingsConfig.issues,
-        providers,
+        providers: [],
         availableEditors: resolveAvailableEditors(),
         observability: {
           logsDirectoryPath: config.logsDir,
@@ -594,7 +599,10 @@ const WsRpcLayer = WsRpcGroup.toLayer(
       [WS_METHODS.serverRefreshProviders]: (_input) =>
         observeRpcEffect(
           WS_METHODS.serverRefreshProviders,
-          providerRegistry.refresh().pipe(Effect.map((providers) => ({ providers }))),
+          piRuntime.refreshRuntimeSnapshot.pipe(
+            Effect.as({ providers: [] as const }),
+            Effect.catch(() => Effect.succeed({ providers: [] as const })),
+          ),
           { "rpc.aggregate": "server" },
         ),
       [WS_METHODS.serverUpsertKeybinding]: (rule) =>
@@ -613,6 +621,38 @@ const WsRpcLayer = WsRpcGroup.toLayer(
       [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
         observeRpcEffect(WS_METHODS.serverUpdateSettings, serverSettings.updateSettings(patch), {
           "rpc.aggregate": "server",
+        }),
+      [WS_METHODS.piGetRuntime]: (_input) =>
+        observeRpcEffect(WS_METHODS.piGetRuntime, piRuntime.getRuntimeSnapshot, {
+          "rpc.aggregate": "pi",
+        }),
+      [WS_METHODS.piRefreshRuntime]: (_input) =>
+        observeRpcEffect(WS_METHODS.piRefreshRuntime, piRuntime.refreshRuntimeSnapshot, {
+          "rpc.aggregate": "pi",
+        }),
+      [WS_METHODS.piListThreads]: (_input) =>
+        observeRpcEffect(WS_METHODS.piListThreads, piRuntime.listThreads, {
+          "rpc.aggregate": "pi",
+        }),
+      [WS_METHODS.piGetThread]: (input) =>
+        observeRpcEffect(WS_METHODS.piGetThread, piRuntime.getThread(input), {
+          "rpc.aggregate": "pi",
+        }),
+      [WS_METHODS.piCreateThread]: (input) =>
+        observeRpcEffect(WS_METHODS.piCreateThread, piRuntime.createThread(input), {
+          "rpc.aggregate": "pi",
+        }),
+      [WS_METHODS.piSendPrompt]: (input) =>
+        observeRpcEffect(WS_METHODS.piSendPrompt, piRuntime.sendPrompt(input), {
+          "rpc.aggregate": "pi",
+        }),
+      [WS_METHODS.piSetThreadModel]: (input) =>
+        observeRpcEffect(WS_METHODS.piSetThreadModel, piRuntime.setThreadModel(input), {
+          "rpc.aggregate": "pi",
+        }),
+      [WS_METHODS.piAbortThread]: (input) =>
+        observeRpcEffect(WS_METHODS.piAbortThread, piRuntime.abortThread(input), {
+          "rpc.aggregate": "pi",
         }),
       [WS_METHODS.projectsSearchEntries]: (input) =>
         observeRpcEffect(
@@ -819,13 +859,6 @@ const WsRpcLayer = WsRpcGroup.toLayer(
                 },
               })),
             );
-            const providerStatuses = providerRegistry.streamChanges.pipe(
-              Stream.map((providers) => ({
-                version: 1 as const,
-                type: "providerStatuses" as const,
-                payload: { providers },
-              })),
-            );
             const settingsUpdates = serverSettings.streamChanges.pipe(
               Stream.map((settings) => ({
                 version: 1 as const,
@@ -840,7 +873,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
                 type: "snapshot" as const,
                 config: yield* loadServerConfig,
               }),
-              Stream.merge(keybindingsUpdates, Stream.merge(providerStatuses, settingsUpdates)),
+              Stream.merge(keybindingsUpdates, settingsUpdates),
             );
           }),
           { "rpc.aggregate": "server" },
@@ -860,6 +893,10 @@ const WsRpcLayer = WsRpcGroup.toLayer(
           }),
           { "rpc.aggregate": "server" },
         ),
+      [WS_METHODS.subscribePiThreadEvents]: (_input) =>
+        observeRpcStream(WS_METHODS.subscribePiThreadEvents, piRuntime.streamEvents, {
+          "rpc.aggregate": "pi",
+        }),
     });
   }),
 );

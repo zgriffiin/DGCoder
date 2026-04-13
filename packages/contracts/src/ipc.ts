@@ -41,6 +41,17 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type {
+  PiAbortThreadInput,
+  PiCreateThreadInput,
+  PiGetThreadInput,
+  PiRuntimeSnapshot,
+  PiSendPromptInput,
+  PiSetThreadModelInput,
+  PiThreadSnapshot,
+  PiThreadStreamEvent,
+  PiThreadSummary,
+} from "./pi";
+import type {
   ServerConfig,
   ServerProviderUpdatedPayload,
   ServerUpsertKeybindingResult,
@@ -191,6 +202,22 @@ export interface LocalApi {
  * `environmentId` rather than reaching through the local desktop bridge.
  */
 export interface EnvironmentApi {
+  pi: {
+    getRuntime: () => Promise<PiRuntimeSnapshot>;
+    refreshRuntime: () => Promise<PiRuntimeSnapshot>;
+    listThreads: () => Promise<PiThreadSummary[]>;
+    getThread: (input: PiGetThreadInput) => Promise<PiThreadSnapshot>;
+    createThread: (input: PiCreateThreadInput) => Promise<PiThreadSnapshot>;
+    sendPrompt: (input: PiSendPromptInput) => Promise<PiThreadSnapshot>;
+    setThreadModel: (input: PiSetThreadModelInput) => Promise<PiThreadSnapshot>;
+    abortThread: (input: PiAbortThreadInput) => Promise<PiThreadSnapshot>;
+    onEvent: (
+      callback: (event: PiThreadStreamEvent) => void,
+      options?: {
+        onResubscribe?: () => void;
+      },
+    ) => () => void;
+  };
   terminal: {
     open: (input: typeof TerminalOpenInput.Encoded) => Promise<TerminalSessionSnapshot>;
     write: (input: typeof TerminalWriteInput.Encoded) => Promise<void>;

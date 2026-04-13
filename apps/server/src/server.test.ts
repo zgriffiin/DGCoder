@@ -99,6 +99,7 @@ import {
   ServerEnvironment,
   type ServerEnvironmentShape,
 } from "./environment/Services/ServerEnvironment.ts";
+import { PiRuntime, type PiRuntimeShape } from "./pi/Services/PiRuntime.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.ts";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
@@ -301,6 +302,7 @@ const buildAppUnderTest = (options?: {
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
+    piRuntime?: Partial<PiRuntimeShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -354,126 +356,124 @@ const buildAppUnderTest = (options?: {
         ...options?.layers?.threadProgressTracker,
       }),
     );
+    const supportLayer = Layer.mergeAll(
+      Layer.mock(Keybindings)({
+        streamChanges: Stream.empty,
+        ...options?.layers?.keybindings,
+      }),
+      Layer.mock(ProviderRegistry)({
+        getProviders: Effect.succeed([]),
+        refresh: () => Effect.succeed([]),
+        streamChanges: Stream.empty,
+        ...options?.layers?.providerRegistry,
+      }),
+      Layer.mock(ServerSettingsService)({
+        start: Effect.void,
+        ready: Effect.void,
+        getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+        updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+        streamChanges: Stream.empty,
+        ...options?.layers?.serverSettings,
+      }),
+      Layer.mock(Open)({
+        ...options?.layers?.open,
+      }),
+      Layer.mock(GitCore)({
+        ...options?.layers?.gitCore,
+      }),
+      gitManagerLayer,
+      gitStatusBroadcasterLayer,
+      Layer.mock(ProjectSetupScriptRunner)({
+        runForThread: () => Effect.succeed({ status: "no-script" as const }),
+        ...options?.layers?.projectSetupScriptRunner,
+      }),
+      Layer.mock(TerminalManager)({
+        ...options?.layers?.terminalManager,
+      }),
+      Layer.mock(OrchestrationEngineService)({
+        getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.succeed({ sequence: 0 }),
+        streamDomainEvents: Stream.empty,
+        ...options?.layers?.orchestrationEngine,
+      }),
+      Layer.mock(ProjectionSnapshotQuery)({
+        getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+        ...options?.layers?.projectionSnapshotQuery,
+      }),
+      Layer.mock(CheckpointDiffQuery)({
+        getTurnDiff: () =>
+          Effect.succeed({
+            threadId: defaultThreadId,
+            fromTurnCount: 0,
+            toTurnCount: 0,
+            diff: "",
+          }),
+        getFullThreadDiff: () =>
+          Effect.succeed({
+            threadId: defaultThreadId,
+            fromTurnCount: 0,
+            toTurnCount: 0,
+            diff: "",
+          }),
+        ...options?.layers?.checkpointDiffQuery,
+      }),
+      observabilityAndProgressLayer,
+      Layer.mock(ServerLifecycleEvents)({
+        publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
+        snapshot: Effect.succeed({ sequence: 0, events: [] }),
+        stream: Stream.empty,
+        ...options?.layers?.serverLifecycleEvents,
+      }),
+      Layer.mock(ServerRuntimeStartup)({
+        awaitCommandReady: Effect.void,
+        markHttpListening: Effect.void,
+        enqueueCommand: (effect) => effect,
+        ...options?.layers?.serverRuntimeStartup,
+      }),
+      Layer.mock(ServerEnvironment)({
+        getEnvironmentId: Effect.succeed(testEnvironmentDescriptor.environmentId),
+        getDescriptor: Effect.succeed(testEnvironmentDescriptor),
+        ...options?.layers?.serverEnvironment,
+      }),
+      Layer.mock(PiRuntime)({
+        getRuntimeSnapshot: Effect.succeed({
+          providers: [],
+          models: [],
+          configuredModelCount: 0,
+          authFilePath: "C:\\test\\pi\\auth.json",
+        }),
+        refreshRuntimeSnapshot: Effect.succeed({
+          providers: [],
+          models: [],
+          configuredModelCount: 0,
+          authFilePath: "C:\\test\\pi\\auth.json",
+        }),
+        listThreads: Effect.succeed([]),
+        getThread: () => Effect.die(new Error("Pi thread lookup not configured in test runtime.")),
+        createThread: () =>
+          Effect.die(new Error("Pi thread creation not configured in test runtime.")),
+        sendPrompt: () =>
+          Effect.die(new Error("Pi prompt dispatch not configured in test runtime.")),
+        setThreadModel: () =>
+          Effect.die(new Error("Pi model switching not configured in test runtime.")),
+        abortThread: () => Effect.die(new Error("Pi abort not configured in test runtime.")),
+        streamEvents: Stream.empty,
+        ...options?.layers?.piRuntime,
+      }),
+      Layer.mock(RepositoryIdentityResolver)({
+        resolve: () => Effect.succeed(null),
+        ...options?.layers?.repositoryIdentityResolver,
+      }),
+      workspaceAndProjectServicesLayer,
+      FetchHttpClient.layer,
+      layerConfig,
+    );
 
     const appLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
       disableLogger: true,
-    }).pipe(
-      Layer.provide(
-        Layer.mock(Keybindings)({
-          streamChanges: Stream.empty,
-          ...options?.layers?.keybindings,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ProviderRegistry)({
-          getProviders: Effect.succeed([]),
-          refresh: () => Effect.succeed([]),
-          streamChanges: Stream.empty,
-          ...options?.layers?.providerRegistry,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerSettingsService)({
-          start: Effect.void,
-          ready: Effect.void,
-          getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          streamChanges: Stream.empty,
-          ...options?.layers?.serverSettings,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(Open)({
-          ...options?.layers?.open,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(GitCore)({
-          ...options?.layers?.gitCore,
-        }),
-      ),
-      Layer.provide(gitManagerLayer),
-      Layer.provideMerge(gitStatusBroadcasterLayer),
-      Layer.provide(
-        Layer.mock(ProjectSetupScriptRunner)({
-          runForThread: () => Effect.succeed({ status: "no-script" as const }),
-          ...options?.layers?.projectSetupScriptRunner,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(TerminalManager)({
-          ...options?.layers?.terminalManager,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(OrchestrationEngineService)({
-          getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          ...options?.layers?.orchestrationEngine,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ProjectionSnapshotQuery)({
-          getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          ...options?.layers?.projectionSnapshotQuery,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(CheckpointDiffQuery)({
-          getTurnDiff: () =>
-            Effect.succeed({
-              threadId: defaultThreadId,
-              fromTurnCount: 0,
-              toTurnCount: 0,
-              diff: "",
-            }),
-          getFullThreadDiff: () =>
-            Effect.succeed({
-              threadId: defaultThreadId,
-              fromTurnCount: 0,
-              toTurnCount: 0,
-              diff: "",
-            }),
-          ...options?.layers?.checkpointDiffQuery,
-        }),
-      ),
-      Layer.provide(observabilityAndProgressLayer),
-      Layer.provide(
-        Layer.mock(ServerLifecycleEvents)({
-          publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
-          snapshot: Effect.succeed({ sequence: 0, events: [] }),
-          stream: Stream.empty,
-          ...options?.layers?.serverLifecycleEvents,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerRuntimeStartup)({
-          awaitCommandReady: Effect.void,
-          markHttpListening: Effect.void,
-          enqueueCommand: (effect) => effect,
-          ...options?.layers?.serverRuntimeStartup,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerEnvironment)({
-          getEnvironmentId: Effect.succeed(testEnvironmentDescriptor.environmentId),
-          getDescriptor: Effect.succeed(testEnvironmentDescriptor),
-          ...options?.layers?.serverEnvironment,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(RepositoryIdentityResolver)({
-          resolve: () => Effect.succeed(null),
-          ...options?.layers?.repositoryIdentityResolver,
-        }),
-      ),
-      Layer.provide(workspaceAndProjectServicesLayer),
-      Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provide(layerConfig),
-    );
+    }).pipe(Layer.provide(supportLayer));
 
     yield* Layer.build(appLayer);
     return config;

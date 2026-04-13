@@ -1513,7 +1513,7 @@ const make = Effect.fn("make")(function* () {
 
   const processDomainEvent = (
     _event: TurnStartRequestedDomainEvent,
-  ): Effect.Effect<undefined, never, never> => Effect.succeed(undefined);
+  ): Effect.Effect<undefined, never, never> => Effect.void.pipe(Effect.as(undefined));
 
   const processInput = (input: RuntimeIngestionInput): ReturnType<typeof processRuntimeEvent> => {
     if (input.source === "runtime") {

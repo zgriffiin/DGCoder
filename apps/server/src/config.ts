@@ -21,6 +21,8 @@ export interface ServerDerivedPaths {
   readonly dbPath: string;
   readonly keybindingsConfigPath: string;
   readonly settingsPath: string;
+  readonly piAgentDir: string;
+  readonly piSessionsDir: string;
   readonly worktreesDir: string;
   readonly attachmentsDir: string;
   readonly logsDir: string;
@@ -68,6 +70,8 @@ export const deriveServerPaths = Effect.fn(function* (
   const stateDir = join(baseDir, devUrl !== undefined ? "dev" : "userdata");
   const dbPath = join(stateDir, "state.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
+  const piAgentDir = join(stateDir, "pi");
+  const piSessionsDir = join(piAgentDir, "sessions");
   const logsDir = join(stateDir, "logs");
   const providerLogsDir = join(logsDir, "provider");
   return {
@@ -75,6 +79,8 @@ export const deriveServerPaths = Effect.fn(function* (
     dbPath,
     keybindingsConfigPath: join(stateDir, "keybindings.json"),
     settingsPath: join(stateDir, "settings.json"),
+    piAgentDir,
+    piSessionsDir,
     worktreesDir: join(baseDir, "worktrees"),
     attachmentsDir,
     logsDir,
@@ -98,6 +104,8 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(derivedPaths.logsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.providerLogsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.terminalLogsDir, { recursive: true }),
+      fs.makeDirectory(derivedPaths.piAgentDir, { recursive: true }),
+      fs.makeDirectory(derivedPaths.piSessionsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.attachmentsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.worktreesDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.keybindingsConfigPath), { recursive: true }),

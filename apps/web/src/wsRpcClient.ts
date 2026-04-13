@@ -69,6 +69,17 @@ interface GitRunStackedActionOptions {
 export interface WsRpcClient {
   readonly dispose: () => Promise<void>;
   readonly reconnect: () => Promise<void>;
+  readonly pi: {
+    readonly getRuntime: RpcUnaryNoArgMethod<typeof WS_METHODS.piGetRuntime>;
+    readonly refreshRuntime: RpcUnaryNoArgMethod<typeof WS_METHODS.piRefreshRuntime>;
+    readonly listThreads: RpcUnaryNoArgMethod<typeof WS_METHODS.piListThreads>;
+    readonly getThread: RpcUnaryMethod<typeof WS_METHODS.piGetThread>;
+    readonly createThread: RpcUnaryMethod<typeof WS_METHODS.piCreateThread>;
+    readonly sendPrompt: RpcUnaryMethod<typeof WS_METHODS.piSendPrompt>;
+    readonly setThreadModel: RpcUnaryMethod<typeof WS_METHODS.piSetThreadModel>;
+    readonly abortThread: RpcUnaryMethod<typeof WS_METHODS.piAbortThread>;
+    readonly onEvent: RpcStreamMethod<typeof WS_METHODS.subscribePiThreadEvents>;
+  };
   readonly terminal: {
     readonly open: RpcUnaryMethod<typeof WS_METHODS.terminalOpen>;
     readonly write: RpcUnaryMethod<typeof WS_METHODS.terminalWrite>;
@@ -306,6 +317,25 @@ export function createWsRpcClient(
     reconnect: async () => {
       resetWsReconnectBackoff();
       await transport.reconnect();
+    },
+    pi: {
+      getRuntime: () => transport.request((client) => client[WS_METHODS.piGetRuntime]({})),
+      refreshRuntime: () => transport.request((client) => client[WS_METHODS.piRefreshRuntime]({})),
+      listThreads: () => transport.request((client) => client[WS_METHODS.piListThreads]({})),
+      getThread: (input) => transport.request((client) => client[WS_METHODS.piGetThread](input)),
+      createThread: (input) =>
+        transport.request((client) => client[WS_METHODS.piCreateThread](input)),
+      sendPrompt: (input) => transport.request((client) => client[WS_METHODS.piSendPrompt](input)),
+      setThreadModel: (input) =>
+        transport.request((client) => client[WS_METHODS.piSetThreadModel](input)),
+      abortThread: (input) =>
+        transport.request((client) => client[WS_METHODS.piAbortThread](input)),
+      onEvent: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribePiThreadEvents]({}),
+          listener,
+          options,
+        ),
     },
     terminal: {
       open: (input) => transport.request((client) => client[WS_METHODS.terminalOpen](input)),

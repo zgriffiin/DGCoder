@@ -1858,7 +1858,7 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
             >
               <T3Wordmark />
               <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
-                Code
+                DGCode
               </span>
               <span className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
                 {APP_STAGE_LABEL}
@@ -1903,6 +1903,10 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>
+      <p className="px-2 pt-2 text-[10px] leading-relaxed text-muted-foreground/55">
+        DGCode builds on T3Code UI patterns and the Pi runtime. Thanks to the authors and
+        maintainers behind both projects.
+      </p>
     </SidebarFooter>
   );
 });

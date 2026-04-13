@@ -43,7 +43,6 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { ThreadProgressTrackerLive } from "./orchestration/Layers/ThreadProgressTracker";
-import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry";
 import { ServerSettingsLive } from "./serverSettings";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver";
@@ -54,6 +53,7 @@ import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScrip
 import { ObservabilityLive } from "./observability/Layers/Observability";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { QualityGateLive } from "./qualityGate";
+import { PiRuntimeLive } from "./pi/Layers/PiRuntime";
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -207,12 +207,12 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(TerminalLayerLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
-  Layer.provideMerge(ProviderRegistryLive),
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLive),
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
+  Layer.provideMerge(PiRuntimeLive),
 
   // Misc.
   Layer.provideMerge(AnalyticsServiceLayerLive),

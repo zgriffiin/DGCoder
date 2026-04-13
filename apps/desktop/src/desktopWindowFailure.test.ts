@@ -5,7 +5,7 @@ import { buildDesktopWindowFailurePageHtml } from "./desktopWindowFailure";
 describe("desktopWindowFailure", () => {
   it("renders failure details and escapes unsafe content", () => {
     const html = buildDesktopWindowFailurePageHtml({
-      appDisplayName: "T3 Code (Dev)",
+      appDisplayName: "DGCode (Dev)",
       heading: "Renderer crashed",
       summary: "Desktop shell hit a fatal renderer failure.",
       detailLines: ['URL: http://localhost:3000/?q=<script>alert("x")</script>'],
@@ -21,7 +21,7 @@ describe("desktopWindowFailure", () => {
 
   it("omits optional sections when no details or log path exist", () => {
     const html = buildDesktopWindowFailurePageHtml({
-      appDisplayName: "T3 Code (Alpha)",
+      appDisplayName: "DGCode (Alpha)",
       heading: "Page failed to load",
       summary: "Bundled app shell could not load.",
       detailLines: [],

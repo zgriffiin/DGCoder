@@ -73,6 +73,18 @@ import {
   ProjectWriteFileResult,
 } from "./project";
 import {
+  PiAbortThreadInput,
+  PiCreateThreadInput,
+  PiGetThreadInput,
+  PiRuntimeError,
+  PiRuntimeSnapshot,
+  PiSendPromptInput,
+  PiSetThreadModelInput,
+  PiThreadSnapshot,
+  PiThreadStreamEvent,
+  PiThreadSummary,
+} from "./pi";
+import {
   TerminalClearInput,
   TerminalCloseInput,
   TerminalError,
@@ -139,6 +151,16 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
 
+  // Pi runtime
+  piGetRuntime: "pi.getRuntime",
+  piRefreshRuntime: "pi.refreshRuntime",
+  piListThreads: "pi.listThreads",
+  piGetThread: "pi.getThread",
+  piCreateThread: "pi.createThread",
+  piSendPrompt: "pi.sendPrompt",
+  piSetThreadModel: "pi.setThreadModel",
+  piAbortThread: "pi.abortThread",
+
   // Streaming subscriptions
   subscribeGitStatus: "subscribeGitStatus",
   subscribeOrchestrationDomainEvents: "subscribeOrchestrationDomainEvents",
@@ -146,6 +168,7 @@ export const WS_METHODS = {
   subscribeTerminalEvents: "subscribeTerminalEvents",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
+  subscribePiThreadEvents: "subscribePiThreadEvents",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -175,6 +198,54 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: ServerSettingsError,
+});
+
+export const WsPiGetRuntimeRpc = Rpc.make(WS_METHODS.piGetRuntime, {
+  payload: Schema.Struct({}),
+  success: PiRuntimeSnapshot,
+  error: PiRuntimeError,
+});
+
+export const WsPiRefreshRuntimeRpc = Rpc.make(WS_METHODS.piRefreshRuntime, {
+  payload: Schema.Struct({}),
+  success: PiRuntimeSnapshot,
+  error: PiRuntimeError,
+});
+
+export const WsPiListThreadsRpc = Rpc.make(WS_METHODS.piListThreads, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(PiThreadSummary),
+  error: PiRuntimeError,
+});
+
+export const WsPiGetThreadRpc = Rpc.make(WS_METHODS.piGetThread, {
+  payload: PiGetThreadInput,
+  success: PiThreadSnapshot,
+  error: PiRuntimeError,
+});
+
+export const WsPiCreateThreadRpc = Rpc.make(WS_METHODS.piCreateThread, {
+  payload: PiCreateThreadInput,
+  success: PiThreadSnapshot,
+  error: PiRuntimeError,
+});
+
+export const WsPiSendPromptRpc = Rpc.make(WS_METHODS.piSendPrompt, {
+  payload: PiSendPromptInput,
+  success: PiThreadSnapshot,
+  error: PiRuntimeError,
+});
+
+export const WsPiSetThreadModelRpc = Rpc.make(WS_METHODS.piSetThreadModel, {
+  payload: PiSetThreadModelInput,
+  success: PiThreadSnapshot,
+  error: PiRuntimeError,
+});
+
+export const WsPiAbortThreadRpc = Rpc.make(WS_METHODS.piAbortThread, {
+  payload: PiAbortThreadInput,
+  success: PiThreadSnapshot,
+  error: PiRuntimeError,
 });
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
@@ -416,12 +487,27 @@ export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServer
   stream: true,
 });
 
+export const WsSubscribePiThreadEventsRpc = Rpc.make(WS_METHODS.subscribePiThreadEvents, {
+  payload: Schema.Struct({}),
+  success: PiThreadStreamEvent,
+  error: PiRuntimeError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpsertKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsPiGetRuntimeRpc,
+  WsPiRefreshRuntimeRpc,
+  WsPiListThreadsRpc,
+  WsPiGetThreadRpc,
+  WsPiCreateThreadRpc,
+  WsPiSendPromptRpc,
+  WsPiSetThreadModelRpc,
+  WsPiAbortThreadRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsBeansGetProjectStateRpc,
@@ -455,6 +541,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeTerminalEventsRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
+  WsSubscribePiThreadEventsRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
