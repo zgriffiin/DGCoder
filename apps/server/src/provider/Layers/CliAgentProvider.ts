@@ -10,11 +10,11 @@ import type {
 } from "@t3tools/contracts";
 import { buildAmazonQIdentityCenterLoginCommand } from "@t3tools/shared/amazonQ";
 import {
-  buildCliAgentLoginCommand,
   resolveCliAgentCommand,
   type CliAgentCommandSettings,
   type ResolvedCliAgentCommand,
 } from "@t3tools/shared/cliAgentCommand";
+import { buildKiroLoginCommand } from "@t3tools/shared/kiro";
 import { Effect, Equal, Layer, Option, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -588,8 +588,8 @@ export const KIRO_PROVIDER_CONFIG: CliAgentProviderConfig = {
   defaultModelName: "Kiro default",
   versionCommands: [["--version"], ["version"]],
   authCommand: ["whoami", "--format", "json"],
-  loginCommand: "kiro-cli login",
-  buildLoginCommand: buildCliAgentLoginCommand,
+  loginCommand: "kiro-cli login --license pro",
+  buildLoginCommand: buildKiroLoginCommand,
   disabledMessage: "Kiro is disabled in T3 Code settings.",
   selectSettings: (settings) => settings.providers.kiro,
 };

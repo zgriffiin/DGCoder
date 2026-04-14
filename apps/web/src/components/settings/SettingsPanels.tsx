@@ -1,32 +1,15 @@
-import {
-  ArchiveIcon,
-  ArchiveX,
-  ChevronDownIcon,
-  InfoIcon,
-  LoaderIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  Undo2Icon,
-  XIcon,
-} from "lucide-react";
+import { ArchiveIcon, ArchiveX, LoaderIcon, RefreshCwIcon, Undo2Icon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  PROVIDER_DISPLAY_NAMES,
+  type PiRuntimeSnapshot,
   type ScopedThreadRef,
-  type ProviderKind,
   type ServerProvider,
-  type ServerProviderModel,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-import {
-  buildAmazonQIdentityCenterLoginCommand,
-  hasAmazonQIdentityCenterLoginSettings,
-} from "@t3tools/shared/amazonQ";
-import { buildCliAgentLoginCommand } from "@t3tools/shared/cliAgentCommand";
-import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Equal } from "effect";
+import { buildKiroLoginCommand, hasKiroIdentityCenterLoginSettings } from "@t3tools/shared/kiro";
 import { APP_VERSION } from "../../branding";
 import {
   canCheckForUpdate,
@@ -35,10 +18,9 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
-import { ProviderModelPicker } from "../chat/ProviderModelPicker";
-import { TraitsPicker } from "../chat/TraitsPicker";
 import { resolveAndPersistPreferredEditor } from "../../editorPreferences";
 import { isElectron } from "../../env";
+import { usePiRuntime } from "../../hooks/usePiRuntime";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -46,11 +28,6 @@ import {
   setDesktopUpdateStateQueryData,
   useDesktopUpdateState,
 } from "../../lib/desktopUpdateReactQuery";
-import {
-  MAX_CUSTOM_MODEL_LENGTH,
-  getCustomModelOptionsByProvider,
-  resolveAppModelSelectionState,
-} from "../../modelSelection";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
   selectProjectsAcrossEnvironments,
@@ -60,7 +37,6 @@ import {
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsibleContent } from "../ui/collapsible";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -69,10 +45,11 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
+  applyProvidersUpdated,
   useServerAvailableEditors,
+  useServerConfig,
   useServerKeybindingsConfigPath,
   useServerObservability,
-  useServerProviders,
 } from "../../rpc/serverState";
 
 const THEME_OPTIONS = [
@@ -96,65 +73,107 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-type InstallProviderSettings = {
-  provider: ProviderKind;
-  title: string;
-  binaryPlaceholder: string;
-  binaryDescription: ReactNode;
-  customModelPlaceholder: string;
-  homePathKey?: "codexHomePath";
-  homePlaceholder?: string;
-  homeDescription?: ReactNode;
+const CONNECTION_STATUS_STYLES = {
+  success: "bg-success",
+  muted: "bg-muted-foreground/40",
+  warning: "bg-warning",
+} as const;
+
+type ConnectionSummary = {
+  headline: string;
+  detail: string;
+  dotClassName: (typeof CONNECTION_STATUS_STYLES)[keyof typeof CONNECTION_STATUS_STYLES];
 };
 
-const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
-  {
-    provider: "codex",
-    title: "Codex",
-    binaryPlaceholder: "Codex binary path",
-    binaryDescription: "Path to the Codex binary",
-    customModelPlaceholder: "gpt-6.7-codex-ultra-preview",
-    homePathKey: "codexHomePath",
-    homePlaceholder: "CODEX_HOME",
-    homeDescription: "Optional custom Codex home and config directory.",
-  },
-  {
-    provider: "claudeAgent",
-    title: "Claude",
-    binaryPlaceholder: "Claude binary path",
-    binaryDescription: "Path to the Claude binary",
-    customModelPlaceholder: "claude-sonnet-5-0",
-  },
-  {
-    provider: "kiro",
-    title: "Kiro",
-    binaryPlaceholder: "Kiro binary path",
-    binaryDescription: "Path to the Kiro binary",
-    customModelPlaceholder: "kiro-model",
-  },
-  {
-    provider: "amazonQ",
-    title: "Amazon Q",
-    binaryPlaceholder: "Amazon Q binary path",
-    binaryDescription: "Path to the Amazon Q binary.",
-    customModelPlaceholder: "amazon-q-model",
-  },
-] as const;
+function getPiProviderSummary(
+  runtime: PiRuntimeSnapshot | null,
+  providerId: string,
+  label: string,
+): ConnectionSummary {
+  if (!runtime) {
+    return {
+      headline: "Checking runtime",
+      detail: `Waiting for DGCode to load Pi's ${label} catalog.`,
+      dotClassName: CONNECTION_STATUS_STYLES.muted,
+    };
+  }
 
-const PROVIDER_STATUS_STYLES = {
-  disabled: {
-    dot: "bg-amber-400",
-  },
-  error: {
-    dot: "bg-destructive",
-  },
-  ready: {
-    dot: "bg-success",
-  },
-  warning: {
-    dot: "bg-warning",
-  },
-} as const;
+  const provider = runtime.providers.find((entry) => entry.provider === providerId);
+  if (!provider) {
+    return {
+      headline: "Unavailable",
+      detail: `${label} is not present in Pi's current model catalog.`,
+      dotClassName: CONNECTION_STATUS_STYLES.warning,
+    };
+  }
+
+  if (provider.availableModels > 0) {
+    return {
+      headline: "Authenticated",
+      detail: `${provider.availableModels} of ${provider.totalModels} ${label} models are ready in the Pi runtime.`,
+      dotClassName: CONNECTION_STATUS_STYLES.success,
+    };
+  }
+
+  return {
+    headline: "Not authenticated",
+    detail: `Pi knows ${provider.totalModels} ${label} models, but none are connected yet.`,
+    dotClassName: CONNECTION_STATUS_STYLES.warning,
+  };
+}
+
+function getServerProviderSummary(
+  provider: ServerProvider | null,
+  label: string,
+): ConnectionSummary {
+  if (!provider) {
+    return {
+      headline: "Checking status",
+      detail: `Waiting for DGCode to probe the ${label} CLI.`,
+      dotClassName: CONNECTION_STATUS_STYLES.muted,
+    };
+  }
+
+  if (!provider.enabled || provider.status === "disabled") {
+    return {
+      headline: "Disabled",
+      detail: provider.message ?? `${label} is disabled in settings.`,
+      dotClassName: CONNECTION_STATUS_STYLES.muted,
+    };
+  }
+
+  if (!provider.installed) {
+    return {
+      headline: "Not installed",
+      detail: provider.message ?? `${label} CLI is not installed or not on PATH.`,
+      dotClassName: CONNECTION_STATUS_STYLES.warning,
+    };
+  }
+
+  if (provider.auth.status === "authenticated" && provider.status === "ready") {
+    const authLabel = provider.auth.label ?? "authenticated";
+    const versionDetail = provider.version ? ` Version ${provider.version}.` : "";
+    return {
+      headline: "Authenticated",
+      detail: `${authLabel} is ready.${versionDetail}`,
+      dotClassName: CONNECTION_STATUS_STYLES.success,
+    };
+  }
+
+  if (provider.auth.status === "unauthenticated") {
+    return {
+      headline: "Not authenticated",
+      detail: provider.message ?? `Run the ${label} login flow, then reload status.`,
+      dotClassName: CONNECTION_STATUS_STYLES.warning,
+    };
+  }
+
+  return {
+    headline: provider.status === "error" ? "Error" : "Needs attention",
+    detail: provider.message ?? `DGCode could not verify the ${label} CLI status.`,
+    dotClassName: CONNECTION_STATUS_STYLES.warning,
+  };
+}
 
 function thresholdInputValue(value: number | null): string {
   return value === null ? "" : String(value);
@@ -167,63 +186,6 @@ function parseThresholdInput(value: string): number | null {
   }
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function getProviderSummary(provider: ServerProvider | undefined) {
-  if (!provider) {
-    return {
-      headline: "Checking provider status",
-      detail: "Waiting for the server to report installation and authentication details.",
-    };
-  }
-  if (!provider.enabled) {
-    return {
-      headline: "Disabled",
-      detail:
-        provider.message ?? "This provider is installed but disabled for new sessions in DGCode.",
-    };
-  }
-  if (!provider.installed) {
-    return {
-      headline: "Not found",
-      detail: provider.message ?? "CLI not detected on PATH.",
-    };
-  }
-  if (provider.auth.status === "authenticated") {
-    const authLabel = provider.auth.label ?? provider.auth.type;
-    return {
-      headline: authLabel ? `Authenticated · ${authLabel}` : "Authenticated",
-      detail: provider.message ?? null,
-    };
-  }
-  if (provider.auth.status === "unauthenticated") {
-    return {
-      headline: "Not authenticated",
-      detail: provider.message ?? null,
-    };
-  }
-  if (provider.status === "warning") {
-    return {
-      headline: "Needs attention",
-      detail:
-        provider.message ?? "The provider is installed, but the server could not fully verify it.",
-    };
-  }
-  if (provider.status === "error") {
-    return {
-      headline: "Unavailable",
-      detail: provider.message ?? "The provider failed its startup checks.",
-    };
-  }
-  return {
-    headline: "Available",
-    detail: provider.message ?? "Installed and ready, but authentication could not be verified.",
-  };
-}
-
-function getProviderVersionLabel(version: string | null | undefined) {
-  if (!version) return null;
-  return version.startsWith("v") ? version : `v${version}`;
 }
 
 function useRelativeTimeTick(intervalMs = 1_000) {
@@ -351,6 +313,45 @@ function SettingsPageContainer({ children }: { children: ReactNode }) {
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">{children}</div>
+    </div>
+  );
+}
+
+function ConnectionCard({
+  title,
+  summary,
+  actions,
+  children,
+}: {
+  title: string;
+  summary: ConnectionSummary;
+  actions?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="border-t border-border first:border-t-0">
+      <div className="px-4 py-4 sm:px-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex min-h-5 items-center gap-2">
+              <span className={cn("size-2 shrink-0 rounded-full", summary.dotClassName)} />
+              <h3 className="text-sm font-medium text-foreground">{title}</h3>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {summary.headline}
+              {summary.detail ? ` - ${summary.detail}` : null}
+            </p>
+          </div>
+          {actions ? (
+            <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+              {actions}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {children ? (
+        <div className="border-t border-border/60 px-4 py-3 sm:px-5">{children}</div>
+      ) : null}
     </div>
   );
 }
@@ -487,15 +488,9 @@ export function useSettingsRestore(onRestored?: () => void) {
   const settings = useSettings();
   const { resetSettings } = useUpdateSettings();
 
-  const isGitWritingModelDirty = !Equal.equals(
-    settings.textGenerationModelSelection ?? null,
-    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
-  );
-  const areProviderSettingsDirty = PROVIDER_SETTINGS.some((providerSettings) => {
-    const currentSettings = settings.providers[providerSettings.provider];
-    const defaultSettings = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
-    return !Equal.equals(currentSettings, defaultSettings);
-  });
+  const areConnectionHelperSettingsDirty =
+    !Equal.equals(settings.providers.kiro, DEFAULT_UNIFIED_SETTINGS.providers.kiro) ||
+    !Equal.equals(settings.providers.codex, DEFAULT_UNIFIED_SETTINGS.providers.codex);
   const isQualityGateDirty = !Equal.equals(
     settings.qualityGate,
     DEFAULT_UNIFIED_SETTINGS.qualityGate,
@@ -510,12 +505,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap
         ? ["Diff line wrapping"]
         : []),
-      ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
-        ? ["Assistant output"]
-        : []),
-      ...(settings.responseStyle !== DEFAULT_UNIFIED_SETTINGS.responseStyle
-        ? ["Caveman responses"]
-        : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
         : []),
@@ -525,20 +514,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
-      ...(isGitWritingModelDirty ? ["Git writing model"] : []),
-      ...(areProviderSettingsDirty ? ["Providers"] : []),
+      ...(areConnectionHelperSettingsDirty ? ["Connection helpers"] : []),
       ...(isQualityGateDirty ? ["Quality guardrails"] : []),
     ],
     [
-      areProviderSettingsDirty,
-      isGitWritingModelDirty,
+      areConnectionHelperSettingsDirty,
       isQualityGateDirty,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.defaultThreadEnvMode,
       settings.diffWordWrap,
-      settings.enableAssistantStreaming,
-      settings.responseStyle,
       settings.timestampFormat,
       theme,
     ],
@@ -572,61 +557,29 @@ export function GeneralSettingsPanel() {
   const [openingPathByTarget, setOpeningPathByTarget] = useState({
     keybindings: false,
     logsDirectory: false,
+    piAuthFile: false,
   });
   const [openPathErrorByTarget, setOpenPathErrorByTarget] = useState<
-    Partial<Record<"keybindings" | "logsDirectory", string | null>>
+    Partial<Record<"keybindings" | "logsDirectory" | "piAuthFile", string | null>>
   >({});
-  const [openProviderDetails, setOpenProviderDetails] = useState<Record<ProviderKind, boolean>>({
-    codex: Boolean(
-      settings.providers.codex.binaryPath !== DEFAULT_UNIFIED_SETTINGS.providers.codex.binaryPath ||
-      settings.providers.codex.homePath !== DEFAULT_UNIFIED_SETTINGS.providers.codex.homePath ||
-      settings.providers.codex.customModels.length > 0,
-    ),
-    claudeAgent: Boolean(
-      settings.providers.claudeAgent.binaryPath !==
-        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
-      settings.providers.claudeAgent.customModels.length > 0,
-    ),
-    kiro: Boolean(!Equal.equals(settings.providers.kiro, DEFAULT_UNIFIED_SETTINGS.providers.kiro)),
-    amazonQ: Boolean(
-      !Equal.equals(settings.providers.amazonQ, DEFAULT_UNIFIED_SETTINGS.providers.amazonQ),
-    ),
+  const [isRefreshingProviderStatus, setIsRefreshingProviderStatus] = useState(false);
+  const [isLaunchingAuthFlow, setIsLaunchingAuthFlow] = useState({
+    codex: false,
+    kiro: false,
   });
-  const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
-    Record<ProviderKind, string>
-  >({
-    codex: "",
-    claudeAgent: "",
-    kiro: "",
-    amazonQ: "",
-  });
-  const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
-    Partial<Record<ProviderKind, string | null>>
-  >({});
-  const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
-  const refreshingRef = useRef(false);
-  const modelListRefs = useRef<Partial<Record<ProviderKind, HTMLDivElement | null>>>({});
-  const refreshProviders = useCallback(() => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
-    setIsRefreshingProviders(true);
-    void ensureLocalApi()
-      .server.refreshProviders()
-      .catch((error: unknown) => {
-        console.warn("Failed to refresh providers", error);
-      })
-      .finally(() => {
-        refreshingRef.current = false;
-        setIsRefreshingProviders(false);
-      });
-  }, []);
 
+  const serverConfig = useServerConfig();
   const keybindingsConfigPath = useServerKeybindingsConfigPath();
   const availableEditors = useServerAvailableEditors();
   const observability = useServerObservability();
-  const serverProviders = useServerProviders();
-  const codexHomePath = settings.providers.codex.homePath;
+  const {
+    snapshot: piRuntime,
+    checkedAt: piRuntimeCheckedAt,
+    isRefreshing: isRefreshingPiRuntime,
+    refreshRuntime: refreshPiRuntime,
+  } = usePiRuntime();
   const logsDirectoryPath = observability?.logsDirectoryPath ?? null;
+  const piAuthFilePath = piRuntime?.authFilePath ?? null;
   const diagnosticsDescription = (() => {
     const exports: string[] = [];
     if (observability?.otlpTracesEnabled && observability.otlpTracesUrl) {
@@ -639,20 +592,6 @@ export function GeneralSettingsPanel() {
     return exports.length > 0 ? `${mode}. OTLP exporting ${exports.join(" and ")}.` : `${mode}.`;
   })();
 
-  const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
-  const textGenProvider = textGenerationModelSelection.provider;
-  const textGenModel = textGenerationModelSelection.model;
-  const textGenModelOptions = textGenerationModelSelection.options;
-  const gitModelOptionsByProvider = getCustomModelOptionsByProvider(
-    settings,
-    serverProviders,
-    textGenProvider,
-    textGenModel,
-  );
-  const isGitWritingModelDirty = !Equal.equals(
-    settings.textGenerationModelSelection ?? null,
-    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
-  );
   const qualityGate = settings.qualityGate;
   const isQualityGateDirty = !Equal.equals(qualityGate, DEFAULT_UNIFIED_SETTINGS.qualityGate);
   const updateQualityGate = useCallback(
@@ -667,8 +606,31 @@ export function GeneralSettingsPanel() {
     [qualityGate, updateSettings],
   );
 
+  const refreshServerProviders = useCallback(() => {
+    setIsRefreshingProviderStatus(true);
+    void ensureLocalApi()
+      .server.refreshProviders()
+      .then((payload) => {
+        applyProvidersUpdated(payload);
+      })
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not refresh provider status",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      })
+      .finally(() => {
+        setIsRefreshingProviderStatus(false);
+      });
+  }, []);
+
   const openInPreferredEditor = useCallback(
-    (target: "keybindings" | "logsDirectory", path: string | null, failureMessage: string) => {
+    (
+      target: "keybindings" | "logsDirectory" | "piAuthFile",
+      path: string | null,
+      failureMessage: string,
+    ) => {
       if (!path) return;
       setOpenPathErrorByTarget((existing) => ({ ...existing, [target]: null }));
       setOpeningPathByTarget((existing) => ({ ...existing, [target]: true }));
@@ -706,146 +668,109 @@ export function GeneralSettingsPanel() {
     openInPreferredEditor("logsDirectory", logsDirectoryPath, "Unable to open logs folder.");
   }, [logsDirectoryPath, openInPreferredEditor]);
 
+  const openPiAuthFile = useCallback(() => {
+    openInPreferredEditor("piAuthFile", piAuthFilePath, "Unable to open Pi auth file.");
+  }, [openInPreferredEditor, piAuthFilePath]);
+
   const openKeybindingsError = openPathErrorByTarget.keybindings ?? null;
   const openDiagnosticsError = openPathErrorByTarget.logsDirectory ?? null;
+  const openPiAuthFileError = openPathErrorByTarget.piAuthFile ?? null;
   const isOpeningKeybindings = openingPathByTarget.keybindings;
   const isOpeningLogsDirectory = openingPathByTarget.logsDirectory;
+  const isOpeningPiAuthFile = openingPathByTarget.piAuthFile;
 
-  const addCustomModel = useCallback(
-    (provider: ProviderKind) => {
-      const customModelInput = customModelInputByProvider[provider];
-      const customModels = settings.providers[provider].customModels;
-      const normalized = normalizeModelSlug(customModelInput, provider);
-      if (!normalized) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "Enter a model slug.",
-        }));
-        return;
-      }
-      if (
-        serverProviders
-          .find((candidate) => candidate.provider === provider)
-          ?.models.some((option) => !option.isCustom && option.slug === normalized)
-      ) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That model is already built in.",
-        }));
-        return;
-      }
-      if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
-        }));
-        return;
-      }
-      if (customModels.includes(normalized)) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That custom model is already saved.",
-        }));
-        return;
-      }
-
-      updateSettings({
-        providers: {
-          ...settings.providers,
-          [provider]: {
-            ...settings.providers[provider],
-            customModels: [...customModels, normalized],
-          },
+  const codexSummary = useMemo(
+    () => getPiProviderSummary(piRuntime, "openai-codex", "Codex"),
+    [piRuntime],
+  );
+  const kiroProvider = useMemo(
+    () => serverConfig?.providers.find((entry) => entry.provider === "kiro") ?? null,
+    [serverConfig],
+  );
+  const kiroLoginCommand = useMemo(
+    () =>
+      buildKiroLoginCommand(
+        {
+          binaryPath: settings.providers.kiro.binaryPath,
+          executionMode: settings.providers.kiro.executionMode,
+          wslDistro: settings.providers.kiro.wslDistro,
+          identityProviderUrl: settings.providers.kiro.identityProviderUrl,
+          identityCenterRegion: settings.providers.kiro.identityCenterRegion,
         },
-      });
-      setCustomModelInputByProvider((existing) => ({
-        ...existing,
-        [provider]: "",
-      }));
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
+        { platform: "win32" },
+      ),
+    [
+      settings.providers.kiro.binaryPath,
+      settings.providers.kiro.executionMode,
+      settings.providers.kiro.identityCenterRegion,
+      settings.providers.kiro.identityProviderUrl,
+      settings.providers.kiro.wslDistro,
+    ],
+  );
+  const kiroHasIdentityCenterSettings = useMemo(
+    () =>
+      hasKiroIdentityCenterLoginSettings({
+        identityProviderUrl: settings.providers.kiro.identityProviderUrl,
+        identityCenterRegion: settings.providers.kiro.identityCenterRegion,
+      }),
+    [settings.providers.kiro.identityCenterRegion, settings.providers.kiro.identityProviderUrl],
+  );
+  const kiroSummary = useMemo<ConnectionSummary>(() => {
+    if (!isElectron) {
+      return {
+        headline: "Desktop only",
+        detail: "Kiro login helpers are only available in the desktop app.",
+        dotClassName: CONNECTION_STATUS_STYLES.muted,
+      };
+    }
 
-      const el = modelListRefs.current[provider];
-      if (!el) return;
-      const scrollToEnd = () => el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-      requestAnimationFrame(scrollToEnd);
-      const observer = new MutationObserver(() => {
-        scrollToEnd();
-        observer.disconnect();
-      });
-      observer.observe(el, { childList: true, subtree: true });
-      setTimeout(() => observer.disconnect(), 2_000);
+    return getServerProviderSummary(kiroProvider, "Kiro");
+  }, [kiroProvider]);
+
+  const launchAuthFlow = useCallback(
+    async (provider: "codex" | "kiro") => {
+      setIsLaunchingAuthFlow((existing) => ({ ...existing, [provider]: true }));
+      try {
+        await ensureLocalApi().shell.launchAuthFlow(
+          provider === "kiro"
+            ? {
+                provider,
+                executionMode: settings.providers.kiro.executionMode,
+                wslDistro: settings.providers.kiro.wslDistro,
+                identityProviderUrl: settings.providers.kiro.identityProviderUrl,
+                identityCenterRegion: settings.providers.kiro.identityCenterRegion,
+              }
+            : { provider },
+        );
+        toastManager.add({
+          type: "success",
+          title: provider === "codex" ? "Opened Codex login" : "Opened Kiro login",
+          description:
+            provider === "codex"
+              ? "A Pi terminal opened. Run `/login openai-codex`, then complete ChatGPT sign-in in your browser."
+              : "A Kiro login terminal opened. Complete the CLI login flow there, then reload status.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: provider === "codex" ? "Could not open Codex login" : "Could not open Kiro login",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      } finally {
+        setIsLaunchingAuthFlow((existing) => ({ ...existing, [provider]: false }));
+      }
     },
-    [customModelInputByProvider, serverProviders, settings, updateSettings],
+    [
+      settings.providers.kiro.executionMode,
+      settings.providers.kiro.identityCenterRegion,
+      settings.providers.kiro.identityProviderUrl,
+      settings.providers.kiro.wslDistro,
+    ],
   );
 
-  const removeCustomModel = useCallback(
-    (provider: ProviderKind, slug: string) => {
-      updateSettings({
-        providers: {
-          ...settings.providers,
-          [provider]: {
-            ...settings.providers[provider],
-            customModels: settings.providers[provider].customModels.filter(
-              (model) => model !== slug,
-            ),
-          },
-        },
-      });
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
-    },
-    [settings, updateSettings],
-  );
-
-  const providerCards = PROVIDER_SETTINGS.map((providerSettings) => {
-    const liveProvider = serverProviders.find(
-      (candidate) => candidate.provider === providerSettings.provider,
-    );
-    const providerConfig = settings.providers[providerSettings.provider];
-    const defaultProviderConfig = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
-    const statusKey = liveProvider?.status ?? (providerConfig.enabled ? "warning" : "disabled");
-    const summary = getProviderSummary(liveProvider);
-    const models: ReadonlyArray<ServerProviderModel> =
-      liveProvider?.models ??
-      providerConfig.customModels.map((slug) => ({
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      }));
-
-    return {
-      provider: providerSettings.provider,
-      title: providerSettings.title,
-      binaryPlaceholder: providerSettings.binaryPlaceholder,
-      binaryDescription: providerSettings.binaryDescription,
-      customModelPlaceholder: providerSettings.customModelPlaceholder,
-      homePathKey: providerSettings.homePathKey,
-      homePlaceholder: providerSettings.homePlaceholder,
-      homeDescription: providerSettings.homeDescription,
-      binaryPathValue: providerConfig.binaryPath,
-      isDirty: !Equal.equals(providerConfig, defaultProviderConfig),
-      liveProvider,
-      models,
-      providerConfig,
-      statusStyle: PROVIDER_STATUS_STYLES[statusKey],
-      summary,
-      versionLabel: getProviderVersionLabel(liveProvider?.version),
-    };
-  });
-
-  const lastCheckedAt =
-    serverProviders.length > 0
-      ? serverProviders.reduce(
-          (latest, provider) => (provider.checkedAt > latest ? provider.checkedAt : latest),
-          serverProviders[0]!.checkedAt,
-        )
-      : null;
+  const piModelCountSummary = piRuntime
+    ? `${piRuntime.configuredModelCount} authenticated model${piRuntime.configuredModelCount === 1 ? "" : "s"} across ${piRuntime.providers.length} provider${piRuntime.providers.length === 1 ? "" : "s"}.`
+    : "Loading Pi model catalog.";
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
@@ -949,85 +874,6 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          title="Assistant output"
-          description="Show token-by-token output while a response is in progress."
-          resetAction={
-            settings.enableAssistantStreaming !==
-            DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming ? (
-              <SettingResetButton
-                label="assistant output"
-                onClick={() =>
-                  updateSettings({
-                    enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableAssistantStreaming}
-              onCheckedChange={(checked) =>
-                updateSettings({ enableAssistantStreaming: Boolean(checked) })
-              }
-              aria-label="Stream assistant messages"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Caveman responses"
-          description="Make agents answer in Caveman style. Full is the default upstream mode."
-          resetAction={
-            settings.responseStyle !== DEFAULT_UNIFIED_SETTINGS.responseStyle ? (
-              <SettingResetButton
-                label="caveman responses"
-                onClick={() =>
-                  updateSettings({
-                    responseStyle: DEFAULT_UNIFIED_SETTINGS.responseStyle,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.responseStyle}
-              onValueChange={(value) => {
-                if (value === "off" || value === "lite" || value === "full" || value === "ultra") {
-                  updateSettings({ responseStyle: value });
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Caveman response style">
-                <SelectValue>
-                  {{
-                    off: "Off",
-                    lite: "Lite",
-                    full: "Full",
-                    ultra: "Ultra",
-                  }[settings.responseStyle] ?? "Full"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="off">
-                  Off
-                </SelectItem>
-                <SelectItem hideIndicator value="lite">
-                  Lite
-                </SelectItem>
-                <SelectItem hideIndicator value="full">
-                  Full
-                </SelectItem>
-                <SelectItem hideIndicator value="ultra">
-                  Ultra
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-
-        <SettingsRow
           title="New threads"
           description="Pick the default workspace mode for newly created draft threads."
           resetAction={
@@ -1119,84 +965,13 @@ export function GeneralSettingsPanel() {
             />
           }
         />
-
-        <SettingsRow
-          title="Text generation model"
-          description="Configure the model used for generated commit messages, PR titles, and similar Git text."
-          resetAction={
-            isGitWritingModelDirty ? (
-              <SettingResetButton
-                label="text generation model"
-                onClick={() =>
-                  updateSettings({
-                    textGenerationModelSelection:
-                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <ProviderModelPicker
-                provider={textGenProvider}
-                model={textGenModel}
-                lockedProvider={null}
-                providers={serverProviders}
-                modelOptionsByProvider={gitModelOptionsByProvider}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onProviderModelChange={(provider, model) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: { provider, model },
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-              <TraitsPicker
-                provider={textGenProvider}
-                models={
-                  serverProviders.find((provider) => provider.provider === textGenProvider)
-                    ?.models ?? []
-                }
-                model={textGenModel}
-                prompt=""
-                onPromptChange={() => {}}
-                modelOptions={textGenModelOptions}
-                allowPromptInjectedEffort={false}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onModelOptionsChange={(nextOptions) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: {
-                          provider: textGenProvider,
-                          model: textGenModel,
-                          ...(nextOptions ? { options: nextOptions } : {}),
-                        },
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-            </div>
-          }
-        />
       </SettingsSection>
 
       <SettingsSection
-        title="Providers"
+        title="Pi Runtime"
         headerAction={
           <div className="flex items-center gap-1.5">
-            <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
+            <ProviderLastChecked lastCheckedAt={piRuntimeCheckedAt} />
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1204,11 +979,11 @@ export function GeneralSettingsPanel() {
                     size="icon-xs"
                     variant="ghost"
                     className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                    disabled={isRefreshingProviders}
-                    onClick={() => void refreshProviders()}
-                    aria-label="Refresh provider status"
+                    disabled={isRefreshingPiRuntime}
+                    onClick={() => refreshPiRuntime()}
+                    aria-label="Refresh Pi runtime status"
                   >
-                    {isRefreshingProviders ? (
+                    {isRefreshingPiRuntime ? (
                       <LoaderIcon className="size-3 animate-spin" />
                     ) : (
                       <RefreshCwIcon className="size-3" />
@@ -1216,470 +991,223 @@ export function GeneralSettingsPanel() {
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Refresh provider status</TooltipPopup>
+              <TooltipPopup side="top">Refresh Pi runtime status</TooltipPopup>
             </Tooltip>
           </div>
         }
       >
-        {providerCards.map((providerCard) => {
-          const customModelInput = customModelInputByProvider[providerCard.provider];
-          const customModelError = customModelErrorByProvider[providerCard.provider] ?? null;
-          const providerDisplayName =
-            PROVIDER_DISPLAY_NAMES[providerCard.provider] ?? providerCard.title;
-          const kiroSettings = providerCard.provider === "kiro" ? settings.providers.kiro : null;
-          const kiroRunsInWsl =
-            kiroSettings?.executionMode === "auto" || kiroSettings?.executionMode === "wsl";
-          const kiroLoginCommand = kiroSettings
-            ? buildCliAgentLoginCommand(kiroSettings, { platform: "win32" })
-            : null;
-          const amazonQSettings =
-            providerCard.provider === "amazonQ" ? settings.providers.amazonQ : null;
-          const amazonQLoginCommand = amazonQSettings
-            ? buildAmazonQIdentityCenterLoginCommand(amazonQSettings)
-            : null;
-          const amazonQHasIdentityCenterSettings = amazonQSettings
-            ? hasAmazonQIdentityCenterLoginSettings(amazonQSettings)
-            : false;
-
-          return (
-            <div key={providerCard.provider} className="border-t border-border first:border-t-0">
-              <div className="px-4 py-4 sm:px-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex min-h-5 items-center gap-1.5">
-                      <span
-                        className={cn("size-2 shrink-0 rounded-full", providerCard.statusStyle.dot)}
-                      />
-                      <h3 className="text-sm font-medium text-foreground">{providerDisplayName}</h3>
-                      {providerCard.versionLabel ? (
-                        <code className="text-xs text-muted-foreground">
-                          {providerCard.versionLabel}
-                        </code>
-                      ) : null}
-                      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
-                        {providerCard.isDirty ? (
-                          <SettingResetButton
-                            label={`${providerDisplayName} provider settings`}
-                            onClick={() => {
-                              updateSettings({
-                                providers: {
-                                  ...settings.providers,
-                                  [providerCard.provider]:
-                                    DEFAULT_UNIFIED_SETTINGS.providers[providerCard.provider],
-                                },
-                              });
-                              setCustomModelErrorByProvider((existing) => ({
-                                ...existing,
-                                [providerCard.provider]: null,
-                              }));
-                            }}
-                          />
-                        ) : null}
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {providerCard.summary.headline}
-                      {providerCard.summary.detail ? ` - ${providerCard.summary.detail}` : null}
-                    </p>
-                  </div>
-                  <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                      onClick={() =>
-                        setOpenProviderDetails((existing) => ({
-                          ...existing,
-                          [providerCard.provider]: !existing[providerCard.provider],
-                        }))
-                      }
-                      aria-label={`Toggle ${providerDisplayName} details`}
-                    >
-                      <ChevronDownIcon
-                        className={cn(
-                          "size-3.5 transition-transform",
-                          openProviderDetails[providerCard.provider] && "rotate-180",
-                        )}
-                      />
-                    </Button>
-                    <Switch
-                      checked={providerCard.providerConfig.enabled}
-                      onCheckedChange={(checked) => {
-                        const isDisabling = !checked;
-                        const shouldClearModelSelection =
-                          isDisabling && textGenProvider === providerCard.provider;
-                        updateSettings({
-                          providers: {
-                            ...settings.providers,
-                            [providerCard.provider]: {
-                              ...settings.providers[providerCard.provider],
-                              enabled: Boolean(checked),
-                            },
-                          },
-                          ...(shouldClearModelSelection
-                            ? {
-                                textGenerationModelSelection:
-                                  DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                              }
-                            : {}),
-                        });
-                      }}
-                      aria-label={`Enable ${providerDisplayName}`}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <Collapsible
-                open={openProviderDetails[providerCard.provider]}
-                onOpenChange={(open) =>
-                  setOpenProviderDetails((existing) => ({
-                    ...existing,
-                    [providerCard.provider]: open,
-                  }))
-                }
-              >
-                <CollapsibleContent>
-                  <div className="space-y-0">
-                    <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                      <label
-                        htmlFor={`provider-install-${providerCard.provider}-binary-path`}
-                        className="block"
-                      >
-                        <span className="text-xs font-medium text-foreground">
-                          {providerDisplayName} binary path
-                        </span>
-                        <Input
-                          id={`provider-install-${providerCard.provider}-binary-path`}
-                          className="mt-1.5"
-                          value={providerCard.binaryPathValue}
-                          onChange={(event) =>
-                            updateSettings({
-                              providers: {
-                                ...settings.providers,
-                                [providerCard.provider]: {
-                                  ...settings.providers[providerCard.provider],
-                                  binaryPath: event.target.value,
-                                },
-                              },
-                            })
-                          }
-                          placeholder={providerCard.binaryPlaceholder}
-                          spellCheck={false}
-                        />
-                        <span className="mt-1 block text-xs text-muted-foreground">
-                          {providerCard.binaryDescription}
-                        </span>
-                      </label>
-                    </div>
-
-                    {providerCard.homePathKey ? (
-                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                        <label
-                          htmlFor={`provider-install-${providerCard.homePathKey}`}
-                          className="block"
-                        >
-                          <span className="text-xs font-medium text-foreground">
-                            CODEX_HOME path
-                          </span>
-                          <Input
-                            id={`provider-install-${providerCard.homePathKey}`}
-                            className="mt-1.5"
-                            value={codexHomePath}
-                            onChange={(event) =>
-                              updateSettings({
-                                providers: {
-                                  ...settings.providers,
-                                  codex: {
-                                    ...settings.providers.codex,
-                                    homePath: event.target.value,
-                                  },
-                                },
-                              })
-                            }
-                            placeholder={providerCard.homePlaceholder}
-                            spellCheck={false}
-                          />
-                          {providerCard.homeDescription ? (
-                            <span className="mt-1 block text-xs text-muted-foreground">
-                              {providerCard.homeDescription}
-                            </span>
-                          ) : null}
-                        </label>
-                      </div>
-                    ) : null}
-
-                    {kiroSettings ? (
-                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0 space-y-1">
-                            <div className="text-xs font-medium text-foreground">WSL execution</div>
-                            <p className="text-xs text-muted-foreground">
-                              Auto uses WSL on Windows and host execution elsewhere.
-                            </p>
-                          </div>
-                          <Switch
-                            checked={kiroRunsInWsl}
-                            onCheckedChange={(checked) =>
-                              updateSettings({
-                                providers: {
-                                  ...settings.providers,
-                                  kiro: {
-                                    ...settings.providers.kiro,
-                                    executionMode: checked ? "wsl" : "host",
-                                  },
-                                },
-                              })
-                            }
-                            aria-label="Run Kiro through WSL"
-                          />
-                        </div>
-                        {kiroRunsInWsl ? (
-                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            <label htmlFor="provider-install-kiro-wsl-distro" className="block">
-                              <span className="text-xs font-medium text-foreground">
-                                WSL distro
-                              </span>
-                              <Input
-                                id="provider-install-kiro-wsl-distro"
-                                className="mt-1.5"
-                                value={kiroSettings.wslDistro}
-                                onChange={(event) =>
-                                  updateSettings({
-                                    providers: {
-                                      ...settings.providers,
-                                      kiro: {
-                                        ...settings.providers.kiro,
-                                        wslDistro: event.target.value,
-                                      },
-                                    },
-                                  })
-                                }
-                                placeholder="Default distro"
-                                spellCheck={false}
-                              />
-                            </label>
-                          </div>
-                        ) : null}
-                        {kiroLoginCommand ? (
-                          <div className="mt-3 rounded-lg border border-border/70 bg-muted/18 px-3 py-2">
-                            <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                              Login command
-                            </div>
-                            <code className="mt-1 block break-all text-xs text-foreground">
-                              {kiroLoginCommand}
-                            </code>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {amazonQSettings ? (
-                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                        <div className="text-xs font-medium text-foreground">
-                          IAM Identity Center SSO
-                        </div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Amazon Q Pro uses your organization&apos;s Start URL and Region for SSO.
-                        </p>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <label
-                            htmlFor="provider-install-amazon-q-identity-provider-url"
-                            className="block"
-                          >
-                            <span className="text-xs font-medium text-foreground">Start URL</span>
-                            <Input
-                              id="provider-install-amazon-q-identity-provider-url"
-                              className="mt-1.5"
-                              value={amazonQSettings.identityProviderUrl}
-                              onChange={(event) =>
-                                updateSettings({
-                                  providers: {
-                                    ...settings.providers,
-                                    amazonQ: {
-                                      ...settings.providers.amazonQ,
-                                      identityProviderUrl: event.target.value,
-                                    },
-                                  },
-                                })
-                              }
-                              placeholder="https://example.awsapps.com/start"
-                              spellCheck={false}
-                            />
-                          </label>
-                          <label
-                            htmlFor="provider-install-amazon-q-identity-center-region"
-                            className="block"
-                          >
-                            <span className="text-xs font-medium text-foreground">Region</span>
-                            <Input
-                              id="provider-install-amazon-q-identity-center-region"
-                              className="mt-1.5"
-                              value={amazonQSettings.identityCenterRegion}
-                              onChange={(event) =>
-                                updateSettings({
-                                  providers: {
-                                    ...settings.providers,
-                                    amazonQ: {
-                                      ...settings.providers.amazonQ,
-                                      identityCenterRegion: event.target.value,
-                                    },
-                                  },
-                                })
-                              }
-                              placeholder="us-east-1"
-                              spellCheck={false}
-                            />
-                          </label>
-                        </div>
-                        <div className="mt-3 rounded-lg border border-border/70 bg-muted/18 px-3 py-2">
-                          <div className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                            Login command
-                          </div>
-                          <code className="mt-1 block break-all text-xs text-foreground">
-                            {amazonQLoginCommand}
-                          </code>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {amazonQHasIdentityCenterSettings
-                              ? "Run this in a terminal, complete SSO in the browser, then refresh provider status."
-                              : "Enter both fields to prefill the IAM Identity Center SSO command."}
-                          </p>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                      <div className="text-xs font-medium text-foreground">Models</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {providerCard.models.length} model
-                        {providerCard.models.length === 1 ? "" : "s"} available.
-                      </div>
-                      <div
-                        ref={(el) => {
-                          modelListRefs.current[providerCard.provider] = el;
-                        }}
-                        className="mt-2 max-h-40 overflow-y-auto pb-1"
-                      >
-                        {providerCard.models.map((model) => {
-                          const caps = model.capabilities;
-                          const capLabels: string[] = [];
-                          if (caps?.supportsFastMode) capLabels.push("Fast mode");
-                          if (caps?.supportsThinkingToggle) capLabels.push("Thinking");
-                          if (
-                            caps?.reasoningEffortLevels &&
-                            caps.reasoningEffortLevels.length > 0
-                          ) {
-                            capLabels.push("Reasoning");
-                          }
-                          const hasDetails = capLabels.length > 0 || model.name !== model.slug;
-
-                          return (
-                            <div
-                              key={`${providerCard.provider}:${model.slug}`}
-                              className="flex items-center gap-2 py-1"
-                            >
-                              <span className="min-w-0 truncate text-xs text-foreground/90">
-                                {model.name}
-                              </span>
-                              {hasDetails ? (
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <button
-                                        type="button"
-                                        className="shrink-0 text-muted-foreground/40 transition-colors hover:text-muted-foreground"
-                                        aria-label={`Details for ${model.name}`}
-                                      />
-                                    }
-                                  >
-                                    <InfoIcon className="size-3" />
-                                  </TooltipTrigger>
-                                  <TooltipPopup side="top" className="max-w-56">
-                                    <div className="space-y-1">
-                                      <code className="block text-[11px] text-foreground">
-                                        {model.slug}
-                                      </code>
-                                      {capLabels.length > 0 ? (
-                                        <div className="flex flex-wrap gap-x-2 gap-y-0.5">
-                                          {capLabels.map((label) => (
-                                            <span
-                                              key={label}
-                                              className="text-[10px] text-muted-foreground"
-                                            >
-                                              {label}
-                                            </span>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  </TooltipPopup>
-                                </Tooltip>
-                              ) : null}
-                              {model.isCustom ? (
-                                <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                                  <span className="text-[10px] text-muted-foreground">custom</span>
-                                  <button
-                                    type="button"
-                                    className="text-muted-foreground transition-colors hover:text-foreground"
-                                    aria-label={`Remove ${model.slug}`}
-                                    onClick={() =>
-                                      removeCustomModel(providerCard.provider, model.slug)
-                                    }
-                                  >
-                                    <XIcon className="size-3" />
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                        <Input
-                          id={`custom-model-${providerCard.provider}`}
-                          value={customModelInput}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setCustomModelInputByProvider((existing) => ({
-                              ...existing,
-                              [providerCard.provider]: value,
-                            }));
-                            if (customModelError) {
-                              setCustomModelErrorByProvider((existing) => ({
-                                ...existing,
-                                [providerCard.provider]: null,
-                              }));
-                            }
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Enter") return;
-                            event.preventDefault();
-                            addCustomModel(providerCard.provider);
-                          }}
-                          placeholder={providerCard.customModelPlaceholder}
-                          spellCheck={false}
-                        />
-                        <Button
-                          className="shrink-0"
-                          variant="outline"
-                          onClick={() => addCustomModel(providerCard.provider)}
-                        >
-                          <PlusIcon className="size-3.5" />
-                          Add
-                        </Button>
-                      </div>
-
-                      {customModelError ? (
-                        <p className="mt-2 text-xs text-destructive">{customModelError}</p>
-                      ) : null}
-                    </div>
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+        <SettingsRow
+          title="Catalog"
+          description="DGCode now reads its model catalog from the Pi runtime instead of the legacy T3 provider bridge."
+          status={
+            piRuntime?.loadError
+              ? `Runtime warning: ${piRuntime.loadError}`
+              : "Pi runtime loaded successfully."
+          }
+          control={
+            <div className="rounded-full border border-border/70 bg-muted/20 px-3 py-1 text-[11px] font-medium text-foreground">
+              {piModelCountSummary}
             </div>
-          );
-        })}
+          }
+        />
+
+        <SettingsRow
+          title="Pi auth file"
+          description="Pi stores subscription and API credentials here. DGCode points Pi at this app-owned auth file instead of the default home-directory location."
+          status={piAuthFilePath ?? "Pi auth path unavailable until the runtime finishes loading."}
+          control={
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!piAuthFilePath || isOpeningPiAuthFile}
+              onClick={() => openPiAuthFile()}
+            >
+              {isOpeningPiAuthFile ? "Opening..." : "Open file"}
+            </Button>
+          }
+        >
+          {openPiAuthFileError ? (
+            <p className="mt-3 text-xs text-destructive">{openPiAuthFileError}</p>
+          ) : null}
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection title="Connections">
+        <ConnectionCard
+          title="Codex subscription"
+          summary={codexSummary}
+          actions={
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!isElectron || isLaunchingAuthFlow.codex}
+                onClick={() => void launchAuthFlow("codex")}
+              >
+                {isLaunchingAuthFlow.codex ? "Opening..." : "Open login"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={isRefreshingPiRuntime}
+                onClick={() => refreshPiRuntime()}
+              >
+                Reload models
+              </Button>
+            </>
+          }
+        >
+          <p className="text-xs text-muted-foreground">
+            Pi&apos;s provider docs use interactive <code>/login</code> for subscription providers.
+            DGCode opens Pi in the same auth directory used by the app, then you can finish the
+            ChatGPT Plus or Pro login for <code>openai-codex</code>.
+          </p>
+        </ConnectionCard>
+
+        <ConnectionCard
+          title="Kiro helper"
+          summary={kiroSummary}
+          actions={
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!isElectron || isLaunchingAuthFlow.kiro}
+                onClick={() => void launchAuthFlow("kiro")}
+              >
+                {isLaunchingAuthFlow.kiro ? "Opening..." : "Open login"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={isRefreshingProviderStatus}
+                onClick={() => refreshServerProviders()}
+              >
+                {isRefreshingProviderStatus ? "Reloading..." : "Reload status"}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 space-y-1">
+                <div className="text-xs font-medium text-foreground">Run Kiro through WSL</div>
+                <p className="text-xs text-muted-foreground">
+                  Keep this on when your Kiro account only works through the Linux-side CLI.
+                </p>
+              </div>
+              <Switch
+                checked={
+                  settings.providers.kiro.executionMode === "auto" ||
+                  settings.providers.kiro.executionMode === "wsl"
+                }
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    providers: {
+                      ...settings.providers,
+                      kiro: {
+                        ...settings.providers.kiro,
+                        executionMode: checked ? "wsl" : "host",
+                      },
+                    },
+                  })
+                }
+                aria-label="Run Kiro through WSL"
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label htmlFor="kiro-identity-provider-url" className="block">
+                <span className="text-xs font-medium text-foreground">IAM Identity Center URL</span>
+                <Input
+                  id="kiro-identity-provider-url"
+                  className="mt-1.5"
+                  value={settings.providers.kiro.identityProviderUrl}
+                  onChange={(event) =>
+                    updateSettings({
+                      providers: {
+                        ...settings.providers,
+                        kiro: {
+                          ...settings.providers.kiro,
+                          identityProviderUrl: event.target.value,
+                        },
+                      },
+                    })
+                  }
+                  placeholder="https://example.awsapps.com/start"
+                  spellCheck={false}
+                />
+              </label>
+
+              <label htmlFor="kiro-identity-center-region" className="block">
+                <span className="text-xs font-medium text-foreground">Region</span>
+                <Input
+                  id="kiro-identity-center-region"
+                  className="mt-1.5"
+                  value={settings.providers.kiro.identityCenterRegion}
+                  onChange={(event) =>
+                    updateSettings({
+                      providers: {
+                        ...settings.providers,
+                        kiro: {
+                          ...settings.providers.kiro,
+                          identityCenterRegion: event.target.value,
+                        },
+                      },
+                    })
+                  }
+                  placeholder="us-east-1"
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+
+            {settings.providers.kiro.executionMode === "auto" ||
+            settings.providers.kiro.executionMode === "wsl" ? (
+              <label htmlFor="kiro-wsl-distro" className="block">
+                <span className="text-xs font-medium text-foreground">WSL distro</span>
+                <Input
+                  id="kiro-wsl-distro"
+                  className="mt-1.5"
+                  value={settings.providers.kiro.wslDistro}
+                  onChange={(event) =>
+                    updateSettings({
+                      providers: {
+                        ...settings.providers,
+                        kiro: {
+                          ...settings.providers.kiro,
+                          wslDistro: event.target.value,
+                        },
+                      },
+                    })
+                  }
+                  placeholder="Default distro"
+                  spellCheck={false}
+                />
+              </label>
+            ) : null}
+
+            <div className="rounded-lg border border-border/70 bg-muted/18 px-3 py-2">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Login command
+              </div>
+              <code className="mt-1 block break-all text-xs text-foreground">
+                {kiroLoginCommand}
+              </code>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {kiroHasIdentityCenterSettings
+                  ? "DGCode will prefill IAM Identity Center login, including WSL if enabled."
+                  : "Add both IAM Identity Center fields to prefill enterprise login, or leave them blank for the generic Kiro Pro flow."}
+              </p>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Kiro runs through DGCode&apos;s CLI orchestration path rather than Pi&apos;s live
+              model catalog. Authenticate here, reload status, then pick <code>Kiro</code> in the
+              composer model menu.
+            </p>
+          </div>
+        </ConnectionCard>
       </SettingsSection>
 
       <SettingsSection title="Quality Guardrails">

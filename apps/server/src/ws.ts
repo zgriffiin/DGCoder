@@ -62,6 +62,7 @@ import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptR
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { PiRuntime } from "./pi/Services/PiRuntime";
+import { ProviderRegistry } from "./provider/Services/ProviderRegistry";
 
 const WsRpcLayer = WsRpcGroup.toLayer(
   Effect.gen(function* () {
@@ -85,6 +86,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
     const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
     const serverEnvironment = yield* ServerEnvironment;
     const piRuntime = yield* PiRuntime;
+    const providerRegistry = yield* ProviderRegistry;
     const serverCommandId = (tag: string) =>
       CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
@@ -367,12 +369,32 @@ const WsRpcLayer = WsRpcGroup.toLayer(
       normalizedCommand: OrchestrationCommand,
     ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
       if (normalizedCommand.type === "thread.turn.start") {
-        return Effect.fail(
-          new OrchestrationDispatchCommandError({
-            message:
-              "Legacy T3 provider turns have been disabled. This composer is still wired to the old orchestration path instead of the Pi runtime.",
-          }),
+        const selectedProvider = normalizedCommand.modelSelection?.provider;
+        const isLegacyPiTurnWithoutBootstrap =
+          !normalizedCommand.bootstrap &&
+          (selectedProvider === "codex" || selectedProvider === "claudeAgent");
+        if (isLegacyPiTurnWithoutBootstrap) {
+          return Effect.fail(
+            new OrchestrationDispatchCommandError({
+              message:
+                "Legacy T3 provider turns have been disabled. This composer is still wired to the old orchestration path instead of the Pi runtime.",
+            }),
+          );
+        }
+
+        const dispatchEffect = _dispatchBootstrapTurnStart(normalizedCommand).pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+          ),
         );
+
+        return startup
+          .enqueueCommand(dispatchEffect)
+          .pipe(
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+            ),
+          );
       }
 
       const dispatchEffect = orchestrationEngine
@@ -396,6 +418,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
       const keybindingsConfig = yield* keybindings.loadConfigState;
       const settings = yield* serverSettings.getSettings;
       const environment = yield* serverEnvironment.getDescriptor;
+      const providers = yield* providerRegistry.getProviders;
 
       return {
         environment,
@@ -403,7 +426,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
         keybindingsConfigPath: config.keybindingsConfigPath,
         keybindings: keybindingsConfig.keybindings,
         issues: keybindingsConfig.issues,
-        providers: [],
+        providers,
         availableEditors: resolveAvailableEditors(),
         observability: {
           logsDirectoryPath: config.logsDir,
@@ -599,10 +622,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
       [WS_METHODS.serverRefreshProviders]: (_input) =>
         observeRpcEffect(
           WS_METHODS.serverRefreshProviders,
-          piRuntime.refreshRuntimeSnapshot.pipe(
-            Effect.as({ providers: [] as const }),
-            Effect.catch(() => Effect.succeed({ providers: [] as const })),
-          ),
+          providerRegistry.refresh().pipe(Effect.map((providers) => ({ providers }))),
           { "rpc.aggregate": "server" },
         ),
       [WS_METHODS.serverUpsertKeybinding]: (rule) =>
@@ -866,6 +886,13 @@ const WsRpcLayer = WsRpcGroup.toLayer(
                 payload: { settings },
               })),
             );
+            const providerUpdates = providerRegistry.streamChanges.pipe(
+              Stream.map((providers) => ({
+                version: 1 as const,
+                type: "providerStatuses" as const,
+                payload: { providers },
+              })),
+            );
 
             return Stream.concat(
               Stream.make({
@@ -873,7 +900,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
                 type: "snapshot" as const,
                 config: yield* loadServerConfig,
               }),
-              Stream.merge(keybindingsUpdates, settingsUpdates),
+              Stream.merge(Stream.merge(keybindingsUpdates, settingsUpdates), providerUpdates),
             );
           }),
           { "rpc.aggregate": "server" },

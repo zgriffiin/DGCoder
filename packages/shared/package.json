@@ -64,6 +64,10 @@
       "types": "./src/amazonQ.ts",
       "import": "./src/amazonQ.ts"
     },
+    "./kiro": {
+      "types": "./src/kiro.ts",
+      "import": "./src/kiro.ts"
+    },
     "./cliAgentCommand": {
       "types": "./src/cliAgentCommand.ts",
       "import": "./src/cliAgentCommand.ts"

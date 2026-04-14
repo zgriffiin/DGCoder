@@ -323,16 +323,28 @@ export const PiRuntimeLive = Layer.effect(
     };
 
     const buildRuntimeSnapshot = (): PiRuntimeSnapshot => {
-      const models = modelRegistry.getAll().map((model) => ({
-        provider: model.provider,
-        id: model.id,
-        name: model.name,
-        reasoning: model.reasoning,
-        input: [...model.input],
-        contextWindow: model.contextWindow,
-        maxTokens: model.maxTokens,
-        authConfigured: modelRegistry.hasConfiguredAuth(model),
-      }));
+      const models = modelRegistry.getAll().flatMap((model) => {
+        const provider = trimToUndefined(model.provider);
+        const id = trimToUndefined(model.id);
+        const name = trimToUndefined(model.name) ?? id;
+
+        if (!provider || !id || !name) {
+          return [];
+        }
+
+        return [
+          {
+            provider,
+            id,
+            name,
+            reasoning: model.reasoning,
+            input: [...model.input],
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxTokens,
+            authConfigured: modelRegistry.hasConfiguredAuth(model),
+          },
+        ];
+      });
 
       const providerCounts = new Map<
         string,

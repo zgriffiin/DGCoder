@@ -84,6 +84,8 @@ export const KiroSettings = Schema.Struct({
     Schema.withDecodingDefault(() => "auto" as const satisfies CliAgentExecutionMode),
   ),
   wslDistro: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  identityProviderUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  identityCenterRegion: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type KiroSettings = typeof KiroSettings.Type;
@@ -225,6 +227,8 @@ const KiroSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(Schema.String),
   executionMode: Schema.optionalKey(CliAgentExecutionMode),
   wslDistro: Schema.optionalKey(Schema.String),
+  identityProviderUrl: Schema.optionalKey(Schema.String),
+  identityCenterRegion: Schema.optionalKey(Schema.String),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 

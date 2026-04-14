@@ -374,6 +374,10 @@ export const TraitsPicker = memo(function TraitsPicker({
 
   const isCodexStyle = provider === "codex";
 
+  if (!triggerLabel) {
+    return null;
+  }
+
   return (
     <Menu
       open={isMenuOpen}
@@ -388,7 +392,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             variant={triggerVariant ?? "ghost"}
             className={cn(
               isCodexStyle
-                ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:max-w-48 sm:px-3 [&_svg]:mx-0"
+                ? "min-w-14 max-w-40 shrink-0 justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:max-w-48 sm:px-3 [&_svg]:mx-0"
                 : "shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3",
               triggerClassName,
             )}
@@ -397,7 +401,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       >
         {isCodexStyle ? (
           <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
-            {triggerLabel}
+            <span className="min-w-0 flex-1 truncate">{triggerLabel}</span>
             <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
           </span>
         ) : (

@@ -5,6 +5,7 @@ import {
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
+  type PiThreadSnapshot,
   type ProjectScript,
   type ProviderKind,
   type ProjectEntry,
@@ -42,6 +43,7 @@ import { useGitStatus } from "~/lib/gitStatusState";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
+import { usePiRuntime } from "../hooks/usePiRuntime";
 import { readLocalApi } from "../localApi";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
@@ -188,7 +190,6 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
-  buildTemporaryWorktreeBranchName,
   cloneComposerImageForRetry,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
@@ -215,12 +216,23 @@ import {
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { useAuthenticatedAssetUrl } from "~/hooks/useAuthenticatedAssetUrl";
 import { selectThreadProgress, useThreadProgressStore } from "../threadProgressStore";
+import {
+  buildPiProviderStatuses,
+  isPiBackedProvider,
+  mapPiSnapshotToChatMessages,
+  mapPiSnapshotToThreadSession,
+  mergeProviderStatuses,
+  PI_THREAD_BINDINGS_STORAGE_KEY,
+  PiThreadBindingsSchema,
+  resolvePiModelSelection,
+} from "../piThreadBridge";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
+const EMPTY_MESSAGES: ChatMessage[] = [];
 
 const INTERRUPTIBLE_PROGRESS_PHASES = new Set<ThreadProgressPhase>([
   "starting",
@@ -816,6 +828,13 @@ export default function ChatView(props: ChatViewProps) {
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
+  const [piThreadBindings, setPiThreadBindings] = useLocalStorage(
+    PI_THREAD_BINDINGS_STORAGE_KEY,
+    {},
+    PiThreadBindingsSchema,
+  );
+  const { snapshot: piRuntimeSnapshot } = usePiRuntime(environmentId);
+  const [activePiSnapshot, setActivePiSnapshot] = useState<PiThreadSnapshot | null>(null);
   const composerSendState = useMemo(
     () =>
       deriveComposerSendState({
@@ -1094,10 +1113,61 @@ export default function ChatView(props: ChatViewProps) {
     selectThreadProgress(state, activeThreadRef),
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const activePiThreadId = activeThreadKey ? (piThreadBindings[activeThreadKey] ?? null) : null;
   const existingOpenTerminalThreadKeys = useMemo(() => {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
     return openTerminalThreadKeys.filter((nextThreadKey) => existingThreadKeys.has(nextThreadKey));
   }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
+  useEffect(() => {
+    if (!isServerThread || !activePiThreadId) {
+      setActivePiSnapshot(null);
+      return;
+    }
+
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      return;
+    }
+
+    let cancelled = false;
+    void api.pi
+      .getThread({ threadId: activePiThreadId as never })
+      .then((snapshot) => {
+        if (!cancelled) {
+          setActivePiSnapshot(snapshot);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setActivePiSnapshot(null);
+          if (activeThread?.id) {
+            setStoreThreadError(
+              activeThread.id,
+              error instanceof Error ? error.message : "Failed to load Pi session.",
+            );
+          }
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePiThreadId, activeThread?.id, environmentId, isServerThread, setStoreThreadError]);
+  useEffect(() => {
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      return;
+    }
+
+    return api.pi.onEvent((event) => {
+      if (event.type !== "threadSnapshot") {
+        return;
+      }
+      if (activePiThreadId && event.snapshot.id === activePiThreadId) {
+        setActivePiSnapshot(event.snapshot);
+      }
+    });
+  }, [activePiThreadId, environmentId]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const threadPlanCatalog = useThreadPlanCatalog(
     useMemo(() => {
@@ -1116,6 +1186,52 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveLatestContextWindowSnapshot(activeThread?.activities ?? []),
     [activeThread?.activities],
   );
+  const piProviderStatuses = useMemo(
+    () => buildPiProviderStatuses(piRuntimeSnapshot),
+    [piRuntimeSnapshot],
+  );
+  const displayThreadMessages = useMemo(
+    () =>
+      isServerThread && activePiThreadId
+        ? mapPiSnapshotToChatMessages(activePiSnapshot)
+        : (activeThread?.messages ?? EMPTY_MESSAGES),
+    [activePiSnapshot, activePiThreadId, activeThread?.messages, isServerThread],
+  );
+  const displayThreadSession = useMemo(
+    () =>
+      isServerThread && activePiThreadId
+        ? mapPiSnapshotToThreadSession(
+            activePiSnapshot,
+            activeThread?.modelSelection.provider ?? "codex",
+          )
+        : (activeThread?.session ?? null),
+    [
+      activePiSnapshot,
+      activePiThreadId,
+      activeThread?.modelSelection.provider,
+      activeThread?.session,
+      isServerThread,
+    ],
+  );
+  const displayThreadError = useMemo(
+    () =>
+      isServerThread && activePiThreadId
+        ? sanitizeThreadErrorMessage(activePiSnapshot?.lastError ?? activeThread?.error ?? null)
+        : (activeThread?.error ?? null),
+    [activePiSnapshot?.lastError, activePiThreadId, activeThread?.error, isServerThread],
+  );
+  const displayThread = useMemo(
+    () =>
+      activeThread
+        ? {
+            ...activeThread,
+            messages: [...displayThreadMessages],
+            session: displayThreadSession,
+            error: displayThreadError,
+          }
+        : undefined,
+    [activeThread, displayThreadError, displayThreadMessages, displayThreadSession],
+  );
   useEffect(() => {
     setMountedTerminalThreadKeys((currentThreadIds) => {
       const nextThreadIds = reconcileMountedTerminalThreadIds({
@@ -1131,7 +1247,7 @@ export default function ChatView(props: ChatViewProps) {
         : nextThreadIds;
     });
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalState.terminalOpen]);
-  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, displayThread?.session ?? null);
   const activeProjectRef = activeThread
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
@@ -1260,16 +1376,19 @@ export default function ChatView(props: ChatViewProps) {
     serverThread?.id,
   ]);
 
-  const sessionProvider = activeThread?.session?.provider ?? null;
+  const sessionProvider = displayThread?.session?.provider ?? null;
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
-  const hasThreadStarted = threadHasStarted(activeThread);
+  const hasThreadStarted = threadHasStarted(displayThread);
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
   const serverConfig = useServerConfig();
-  const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
+  const providerStatuses = useMemo(
+    () => mergeProviderStatuses(serverConfig?.providers ?? EMPTY_PROVIDERS, piProviderStatuses),
+    [piProviderStatuses, serverConfig?.providers],
+  );
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
     selectedProviderByThreadId ?? threadProvider ?? "codex",
@@ -1306,7 +1425,7 @@ export default function ChatView(props: ChatViewProps) {
     [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
   );
   const selectedModelForPicker = selectedModel;
-  const phase = derivePhase(activeThread?.session ?? null);
+  const phase = derivePhase(displayThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
@@ -1393,20 +1512,20 @@ export default function ChatView(props: ChatViewProps) {
     isPreparingWorktree,
     isSendBusy,
   } = useLocalDispatchState({
-    activeThread,
+    activeThread: displayThread,
     activeLatestTurn,
     phase,
     activePendingApproval: activePendingApproval?.requestId ?? null,
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
-    threadError: activeThread?.error,
+    threadError: displayThread?.error,
   });
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
-    activeThread?.session ?? null,
+    displayThread?.session ?? null,
     localDispatchStartedAt,
   );
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
-  const sessionActiveTurnId = activeThread?.session?.activeTurnId ?? null;
+  const sessionActiveTurnId = displayThread?.session?.activeTurnId ?? null;
   const fallbackActiveTurnId = activeLatestTurnId ?? sessionActiveTurnId;
   const activePendingApprovalRequestId = activePendingApproval?.requestId ?? null;
   const activePendingUserInputRequestId = activePendingUserInput?.requestId ?? null;
@@ -1620,7 +1739,7 @@ export default function ChatView(props: ChatViewProps) {
       delete attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId];
     }, ATTACHMENT_PREVIEW_HANDOFF_TTL_MS);
   }, []);
-  const serverMessages = activeThread?.messages;
+  const serverMessages = displayThread?.messages;
   const timelineMessages = useMemo(() => {
     const messages = serverMessages ?? [];
     const serverMessagesWithPreviewHandoff =
@@ -1645,21 +1764,23 @@ export default function ChatView(props: ChatViewProps) {
 
             let changed = false;
             let imageIndex = 0;
-            const attachments = message.attachments.map((attachment) => {
-              if (attachment.type !== "image") {
-                return attachment;
-              }
-              const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
-              imageIndex += 1;
-              if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
-                return attachment;
-              }
-              changed = true;
-              return {
-                ...attachment,
-                previewUrl: handoffPreviewUrl,
-              };
-            });
+            const attachments = message.attachments.map(
+              (attachment: NonNullable<ChatMessage["attachments"]>[number]) => {
+                if (attachment.type !== "image") {
+                  return attachment;
+                }
+                const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
+                imageIndex += 1;
+                if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
+                  return attachment;
+                }
+                changed = true;
+                return {
+                  ...attachment,
+                  previewUrl: handoffPreviewUrl,
+                };
+              },
+            );
 
             return changed ? { ...message, attachments } : message;
           });
@@ -1945,9 +2066,9 @@ export default function ChatView(props: ChatViewProps) {
   }, [diffOpen, environmentId, isServerThread, navigate, threadId]);
 
   const envLocked = Boolean(
-    activeThread &&
-    (activeThread.messages.length > 0 ||
-      (activeThread.session !== null && activeThread.session.status !== "closed")),
+    displayThread &&
+    (displayThread.messages.length > 0 ||
+      (displayThread.session !== null && displayThread.session.status !== "closed")),
   );
   const activeTerminalGroup =
     terminalState.terminalGroups.find(
@@ -2004,6 +2125,16 @@ export default function ChatView(props: ChatViewProps) {
         return false;
       }
       try {
+        const threadRef = scopeThreadRef(environmentId, threadId);
+        const boundPiThreadId = piThreadBindings[scopedThreadKey(threadRef)];
+        if (boundPiThreadId) {
+          const snapshot = await api.pi.abortThread({ threadId: boundPiThreadId as never });
+          if (activePiThreadId && snapshot.id === activePiThreadId) {
+            setActivePiSnapshot(snapshot);
+          }
+          return true;
+        }
+
         await api.orchestration.dispatchCommand({
           type: "thread.turn.interrupt",
           commandId: newCommandId(),
@@ -2019,7 +2150,7 @@ export default function ChatView(props: ChatViewProps) {
         return false;
       }
     },
-    [environmentId, setThreadError],
+    [activePiThreadId, environmentId, piThreadBindings, setThreadError],
   );
   const flushQueuedInterrupt = useCallback(
     async (threadId: ThreadId) => {
@@ -2791,11 +2922,11 @@ export default function ChatView(props: ChatViewProps) {
   }, [composerTerminalContexts]);
 
   useEffect(() => {
-    if (!activeThread?.id) return;
-    if (activeThread.messages.length === 0) {
+    if (!displayThread?.id) return;
+    if (displayThread.messages.length === 0) {
       return;
     }
-    const serverIds = new Set(activeThread.messages.map((message) => message.id));
+    const serverIds = new Set(displayThread.messages.map((message) => message.id));
     const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
     if (removedMessages.length === 0) {
       return;
@@ -2816,7 +2947,12 @@ export default function ChatView(props: ChatViewProps) {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [activeThread?.id, activeThread?.messages, handoffAttachmentPreviews, optimisticUserMessages]);
+  }, [
+    displayThread?.id,
+    displayThread?.messages,
+    handoffAttachmentPreviews,
+    optimisticUserMessages,
+  ]);
 
   useEffect(() => {
     promptRef.current = prompt;
@@ -3377,7 +3513,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
-    const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const isFirstMessage = !isServerThread || displayThreadMessages.length === 0;
     const baseBranchForWorktree =
       isFirstMessage && envMode === "worktree" && !activeThread.worktreePath
         ? activeThread.branch
@@ -3389,6 +3525,13 @@ export default function ChatView(props: ChatViewProps) {
       isFirstMessage && envMode === "worktree" && !activeThread.worktreePath;
     if (shouldCreateWorktree && !activeThread.branch) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
+      return;
+    }
+    if (shouldCreateWorktree) {
+      setThreadError(
+        threadIdForSend,
+        "Pi-backed threads do not support worktree bootstrap yet. Switch to Local mode to continue.",
+      );
       return;
     }
 
@@ -3411,34 +3554,6 @@ export default function ChatView(props: ChatViewProps) {
       effort: selectedPromptEffort,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
-    const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => ({
-        type: "image" as const,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
-      })),
-    );
-    const optimisticAttachments = composerImagesSnapshot.map((image) => ({
-      type: "image" as const,
-      id: image.id,
-      name: image.name,
-      mimeType: image.mimeType,
-      sizeBytes: image.sizeBytes,
-      previewUrl: image.previewUrl,
-    }));
-    setOptimisticUserMessages((existing) => [
-      ...existing,
-      {
-        id: messageIdForSend,
-        role: "user",
-        text: outgoingMessageText,
-        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-        createdAt: messageCreatedAt,
-        streaming: false,
-      },
-    ]);
     // Sending a message should always bring the latest user turn into view.
     shouldAutoScrollRef.current = true;
     forceStickToBottom();
@@ -3486,9 +3601,13 @@ export default function ChatView(props: ChatViewProps) {
         model:
           selectedModel ||
           activeProject.defaultModelSelection?.model ||
-          DEFAULT_MODEL_BY_PROVIDER.codex,
+          DEFAULT_MODEL_BY_PROVIDER[selectedProvider],
         ...(selectedModelSelection.options ? { options: selectedModelSelection.options } : {}),
       };
+      const shouldSendViaPi = isPiBackedProvider(selectedProvider);
+      const piModelSelection = shouldSendViaPi
+        ? resolvePiModelSelection(piRuntimeSnapshot, selectedModelSelection)
+        : null;
 
       // Auto-title from first message
       if (isFirstMessage && isServerThread) {
@@ -3510,54 +3629,87 @@ export default function ChatView(props: ChatViewProps) {
         });
       }
 
-      const turnAttachments = await turnAttachmentsPromise;
-      const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
-          ? {
-              ...(isLocalDraftThread
-                ? {
-                    createThread: {
-                      projectId: activeProject.id,
-                      title,
-                      modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
-                      branch: activeThread.branch,
-                      worktreePath: activeThread.worktreePath,
-                      createdAt: activeThread.createdAt,
-                    },
-                  }
-                : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.cwd,
-                      baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
-            }
-          : undefined;
       beginLocalDispatch({ preparingWorktree: false });
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
-        threadId: threadIdForSend,
-        message: {
-          messageId: messageIdForSend,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: turnAttachments,
-        },
-        modelSelection: selectedModelSelection,
-        titleSeed: title,
-        runtimeMode,
-        interactionMode,
-        ...(bootstrap ? { bootstrap } : {}),
-        createdAt: messageCreatedAt,
+      if (composerImagesSnapshot.length > 0) {
+        throw new Error(
+          shouldSendViaPi
+            ? "Pi-backed chat does not support image attachments yet."
+            : "Kiro-backed chat does not support image attachments yet.",
+        );
+      }
+
+      if (isLocalDraftThread) {
+        await api.orchestration.dispatchCommand({
+          type: "thread.create",
+          commandId: newCommandId(),
+          threadId: threadIdForSend,
+          projectId: activeProject.id,
+          title,
+          modelSelection: threadCreateModelSelection,
+          runtimeMode,
+          interactionMode,
+          branch: activeThread.branch,
+          worktreePath: activeThread.worktreePath,
+          createdAt: activeThread.createdAt,
+        });
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: activeThread.environmentId,
+            threadId: threadIdForSend,
+          },
+        });
+      }
+
+      if (!shouldSendViaPi) {
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: threadIdForSend,
+          message: {
+            messageId: messageIdForSend,
+            role: "user",
+            text: outgoingMessageText,
+            attachments: [],
+          },
+          modelSelection: selectedModelSelection,
+          titleSeed: title,
+          runtimeMode,
+          interactionMode,
+          createdAt: messageCreatedAt,
+        });
+        turnStartSucceeded = true;
+        await markStartDispatchResolved(threadIdForSend);
+        return;
+      }
+
+      if (!piModelSelection) {
+        throw new Error(
+          "Pi could not resolve a supported model for this provider. Refresh the runtime and try again.",
+        );
+      }
+
+      let piThreadIdForSend = activePiThreadId;
+      if (!piThreadIdForSend) {
+        const createdPiThread = await api.pi.createThread({
+          title,
+          ...piModelSelection,
+        });
+        piThreadIdForSend = createdPiThread.id;
+        setPiThreadBindings((existing) => ({
+          ...existing,
+          [scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend))]:
+            createdPiThread.id,
+        }));
+        setActivePiSnapshot(createdPiThread);
+      }
+
+      const nextPiSnapshot = await api.pi.sendPrompt({
+        threadId: piThreadIdForSend as never,
+        prompt: outgoingMessageText,
+        ...piModelSelection,
       });
+      setActivePiSnapshot(nextPiSnapshot);
       turnStartSucceeded = true;
       await markStartDispatchResolved(threadIdForSend);
     })().catch(async (err: unknown) => {
@@ -4061,14 +4213,45 @@ export default function ChatView(props: ChatViewProps) {
         nextModelSelection,
       );
       setStickyComposerModelSelection(nextModelSelection);
+      if (
+        isServerThread &&
+        activePiThreadId &&
+        piRuntimeSnapshot &&
+        isPiBackedProvider(resolvedProvider)
+      ) {
+        const api = readEnvironmentApi(environmentId);
+        const piModelSelection = resolvePiModelSelection(piRuntimeSnapshot, nextModelSelection);
+        if (api && piModelSelection) {
+          void api.pi
+            .setThreadModel({
+              threadId: activePiThreadId as never,
+              provider: piModelSelection.provider,
+              modelId: piModelSelection.modelId,
+            })
+            .then((snapshot) => {
+              setActivePiSnapshot(snapshot);
+            })
+            .catch((error: unknown) => {
+              setThreadError(
+                activeThread.id,
+                error instanceof Error ? error.message : "Failed to switch Pi model.",
+              );
+            });
+        }
+      }
       scheduleComposerFocus();
     },
     [
       activeThread,
+      activePiThreadId,
+      environmentId,
+      isServerThread,
       lockedProvider,
+      piRuntimeSnapshot,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
+      setThreadError,
       providerStatuses,
       settings,
     ],
@@ -4479,7 +4662,7 @@ export default function ChatView(props: ChatViewProps) {
       {/* Error banner */}
       <ProviderStatusBanner status={activeProviderStatus} />
       <ThreadErrorBanner
-        error={activeThread.error}
+        error={displayThread?.error ?? null}
         onDismiss={() => setThreadError(activeThread.id, null)}
       />
       {/* Main content area with optional plan sidebar */}
@@ -4747,7 +4930,7 @@ export default function ChatView(props: ChatViewProps) {
                           "flex min-w-0 flex-1 items-center",
                           isComposerFooterCompact
                             ? "gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                            : "gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
+                            : "gap-1 overflow-hidden sm:min-w-0 sm:overflow-hidden",
                         )}
                       >
                         {/* Provider/model picker */}

@@ -271,7 +271,7 @@ describe("checkCliAgentProviderStatus failure states", () => {
       assert.strictEqual(status.auth.status, "unauthenticated");
       assert.strictEqual(
         status.message,
-        "Kiro is not authenticated. Run `kiro-cli login` and try again.",
+        "Kiro is not authenticated. Run `kiro-cli login --license pro` and try again.",
       );
     }).pipe(
       Effect.provide(
@@ -293,6 +293,42 @@ describe("checkCliAgentProviderStatus failure states", () => {
         ),
       ),
     ),
+  );
+
+  it.effect("uses configured Kiro IAM Identity Center details in unauthenticated guidance", () =>
+    Effect.gen(function* () {
+      const serverSettingsLayer = ServerSettingsService.layerTest({
+        providers: {
+          kiro: {
+            executionMode: "host",
+            identityProviderUrl: "https://example.awsapps.com/start",
+            identityCenterRegion: "us-east-1",
+          },
+        },
+      });
+      const status = yield* checkCliAgentProviderStatus(KIRO_PROVIDER_CONFIG).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            serverSettingsLayer,
+            mockSpawnerLayer((args) => {
+              if (matchesCliInvocation(args, "kiro-cli", ["--version"]))
+                return { stdout: "kiro-cli 1.2.3\n", stderr: "", code: 0 };
+              if (matchesCliInvocation(args, "kiro-cli", ["whoami", "--format", "json"]))
+                return { stdout: '{"authenticated":false}\n', stderr: "", code: 1 };
+              throw new Error(`Unexpected args: ${args.join(" ")}`);
+            }),
+          ),
+        ),
+      );
+
+      assert.strictEqual(status.provider, "kiro");
+      assert.strictEqual(status.status, "error");
+      assert.strictEqual(status.auth.status, "unauthenticated");
+      assert.strictEqual(
+        status.message,
+        "Kiro is not authenticated. Run `kiro-cli login --license pro --identity-provider https://example.awsapps.com/start --region us-east-1` and try again.",
+      );
+    }),
   );
 
   it.effect("skips Amazon Q probes when the provider is disabled", () =>

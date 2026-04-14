@@ -139,6 +139,14 @@ export interface DesktopEnvironmentBootstrap {
   wsUrl: string | null;
 }
 
+export interface LaunchAuthFlowInput {
+  provider: "codex" | "kiro";
+  executionMode?: "auto" | "host" | "wsl";
+  wslDistro?: string;
+  identityProviderUrl?: string;
+  identityCenterRegion?: string;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
@@ -150,6 +158,7 @@ export interface DesktopBridge {
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
+  launchAuthFlow: (input: LaunchAuthFlowInput) => Promise<boolean>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
@@ -176,6 +185,7 @@ export interface LocalApi {
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    launchAuthFlow: (input: LaunchAuthFlowInput) => Promise<void>;
   };
   contextMenu: {
     show: <T extends string>(

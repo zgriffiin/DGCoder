@@ -40,6 +40,16 @@ export function createLocalApi(
 
         window.open(url, "_blank", "noopener,noreferrer");
       },
+      launchAuthFlow: async (input) => {
+        if (!window.desktopBridge) {
+          throw new Error("Authentication helpers are only available in the desktop app.");
+        }
+
+        const launched = await window.desktopBridge.launchAuthFlow(input);
+        if (!launched) {
+          throw new Error("Unable to launch the authentication terminal.");
+        }
+      },
     },
     contextMenu: {
       show: async <T extends string>(

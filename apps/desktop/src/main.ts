@@ -18,6 +18,7 @@ import {
 import type { MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
+  LaunchAuthFlowInput,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateCheckResult,
@@ -27,6 +28,8 @@ import { autoUpdater } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
 import { NetService } from "@t3tools/shared/Net";
+import { resolveCliAgentCommand } from "@t3tools/shared/cliAgentCommand";
+import { hasKiroIdentityCenterLoginSettings } from "@t3tools/shared/kiro";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import {
@@ -67,6 +70,7 @@ const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
+const LAUNCH_AUTH_FLOW_CHANNEL = "desktop:launch-auth-flow";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
@@ -174,6 +178,134 @@ function backendChildEnv(): NodeJS.ProcessEnv {
   delete env.T3CODE_SMOKE_TEST_BACKEND_AUTH_TOKEN;
   delete env.T3CODE_SMOKE_TEST_CAPTURE_BACKEND;
   return env;
+}
+
+function escapePowerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function encodePowerShellScript(lines: ReadonlyArray<string>): string {
+  return Buffer.from(lines.join("\n"), "utf16le").toString("base64");
+}
+
+function buildPowerShellCommandInvocation(input: {
+  executable: string;
+  args?: ReadonlyArray<string>;
+}): string {
+  const escapedExecutable = escapePowerShellLiteral(input.executable);
+  const escapedArgs = (input.args ?? []).map(escapePowerShellLiteral);
+  if (escapedArgs.length === 0) {
+    return `& ${escapedExecutable}`;
+  }
+  return `& ${escapedExecutable} @(${escapedArgs.join(", ")})`;
+}
+
+function launchWindowsPowerShellWindow(input: {
+  title: string;
+  cwd: string;
+  executable: string;
+  args?: ReadonlyArray<string>;
+  notes?: ReadonlyArray<string>;
+  env?: Readonly<Record<string, string>>;
+}): boolean {
+  const scriptLines = [
+    `$Host.UI.RawUI.WindowTitle = ${escapePowerShellLiteral(input.title)}`,
+    `Set-Location -LiteralPath ${escapePowerShellLiteral(input.cwd)}`,
+    ...Object.entries(input.env ?? {}).map(
+      ([key, value]) => `$env:${key} = ${escapePowerShellLiteral(value)}`,
+    ),
+    ...(input.notes ?? []).flatMap((note) => [`Write-Host ${escapePowerShellLiteral(note)}`, ""]),
+    buildPowerShellCommandInvocation({
+      executable: input.executable,
+      ...(input.args ? { args: input.args } : {}),
+    }),
+  ];
+
+  try {
+    const encodedCommand = encodePowerShellScript(scriptLines);
+    const child = ChildProcess.spawn(
+      "cmd.exe",
+      [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoLogo",
+        "-NoExit",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encodedCommand,
+      ],
+      {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+      },
+    );
+    child.unref();
+    return true;
+  } catch (error) {
+    writeDesktopLogHeader(
+      `failed to launch auth terminal title=${sanitizeLogValue(input.title)} message=${sanitizeLogValue(
+        error instanceof Error ? error.message : String(error),
+      )}`,
+    );
+    return false;
+  }
+}
+
+function launchDesktopAuthFlow(input: LaunchAuthFlowInput): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+
+  if (input.provider === "codex") {
+    return launchWindowsPowerShellWindow({
+      title: `${APP_DISPLAY_NAME} Codex Login`,
+      cwd: ROOT_DIR,
+      executable: "bunx",
+      args: ["@mariozechner/pi-coding-agent"],
+      env: {
+        PI_CODING_AGENT_DIR: Path.join(STATE_DIR, "pi"),
+      },
+      notes: [
+        "DGCode opened Pi in the same auth directory used by this app.",
+        "In Pi, run /login openai-codex, then finish the ChatGPT sign-in flow in your browser.",
+      ],
+    });
+  }
+
+  const kiroCommand = resolveCliAgentCommand(
+    {
+      binaryPath: "kiro-cli",
+      executionMode: input.executionMode ?? "auto",
+      wslDistro: input.wslDistro ?? "",
+    },
+    [
+      "login",
+      "--license",
+      "pro",
+      ...(input.identityProviderUrl && input.identityCenterRegion
+        ? ["--identity-provider", input.identityProviderUrl, "--region", input.identityCenterRegion]
+        : []),
+    ],
+    { cwd: ROOT_DIR, platform: process.platform },
+  );
+  const hasEnterpriseSettings = hasKiroIdentityCenterLoginSettings(input);
+
+  return launchWindowsPowerShellWindow({
+    title: `${APP_DISPLAY_NAME} Kiro Login`,
+    cwd: ROOT_DIR,
+    executable: kiroCommand.command,
+    args: kiroCommand.args,
+    notes: [
+      "DGCode opened a Kiro login terminal.",
+      hasEnterpriseSettings
+        ? "Complete the IAM Identity Center sign-in flow here, then return to DGCode and refresh status."
+        : "Complete the Kiro authentication flow here, then return to DGCode and refresh status.",
+    ],
+  });
 }
 
 function resolveBackendBootstrapOverrides(): {
@@ -1556,6 +1688,41 @@ function registerIpcHandlers(): void {
     } catch {
       return false;
     }
+  });
+
+  ipcMain.removeHandler(LAUNCH_AUTH_FLOW_CHANNEL);
+  ipcMain.handle(LAUNCH_AUTH_FLOW_CHANNEL, async (_event, input: unknown) => {
+    if (!input || typeof input !== "object") {
+      return false;
+    }
+
+    const provider = (input as { provider?: unknown }).provider;
+    if (provider !== "codex" && provider !== "kiro") {
+      return false;
+    }
+
+    const executionMode = (input as { executionMode?: LaunchAuthFlowInput["executionMode"] })
+      .executionMode;
+    const wslDistro =
+      typeof (input as { wslDistro?: unknown }).wslDistro === "string"
+        ? (input as { wslDistro: string }).wslDistro
+        : undefined;
+    const identityProviderUrl =
+      typeof (input as { identityProviderUrl?: unknown }).identityProviderUrl === "string"
+        ? (input as { identityProviderUrl: string }).identityProviderUrl
+        : undefined;
+    const identityCenterRegion =
+      typeof (input as { identityCenterRegion?: unknown }).identityCenterRegion === "string"
+        ? (input as { identityCenterRegion: string }).identityCenterRegion
+        : undefined;
+
+    return launchDesktopAuthFlow({
+      provider,
+      ...(executionMode ? { executionMode } : {}),
+      ...(wslDistro ? { wslDistro } : {}),
+      ...(identityProviderUrl ? { identityProviderUrl } : {}),
+      ...(identityCenterRegion ? { identityCenterRegion } : {}),
+    });
   });
 
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
